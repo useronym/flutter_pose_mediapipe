@@ -120,7 +120,6 @@ class PoseLandmarker {
         final Map<String, dynamic> jsonMap = jsonDecode(event);
         return PoseLandMarker.fromJson(jsonMap);
       } catch (e) {
-        print('PoseLandmarker: Error parsing event: $e');
         rethrow;
       }
     });
