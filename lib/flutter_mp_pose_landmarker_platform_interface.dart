@@ -8,7 +8,8 @@ abstract class FlutterMpPoseLandmarkerPlatform extends PlatformInterface {
 
   static final Object _token = Object();
 
-  static FlutterMpPoseLandmarkerPlatform _instance = MethodChannelFlutterMpPoseLandmarker();
+  static FlutterMpPoseLandmarkerPlatform _instance =
+      MethodChannelFlutterMpPoseLandmarker();
 
   /// The default instance of [FlutterMpPoseLandmarkerPlatform] to use.
   ///
@@ -23,7 +24,14 @@ abstract class FlutterMpPoseLandmarkerPlatform extends PlatformInterface {
     _instance = instance;
   }
 
+  /// Returns the platform version.
   Future<String?> getPlatformVersion() {
     throw UnimplementedError('platformVersion() has not been implemented.');
+  }
+
+  /// Checks if camera permission is granted.
+  Future<bool> checkCameraPermission() {
+    throw UnimplementedError(
+        'checkCameraPermission() has not been implemented.');
   }
 }

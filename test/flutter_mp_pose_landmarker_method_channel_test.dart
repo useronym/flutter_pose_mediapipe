@@ -12,7 +12,12 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
       channel,
       (MethodCall methodCall) async {
-        return '42';
+        if (methodCall.method == 'getPlatformVersion') {
+          return '42';
+        } else if (methodCall.method == 'checkCameraPermission') {
+          return true;
+        }
+        return null;
       },
     );
   });
@@ -21,7 +26,19 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
   });
 
-  test('getPlatformVersion', () async {
+  test('getPlatformVersion returns correct value', () async {
     expect(await platform.getPlatformVersion(), '42');
+  });
+
+  test('checkCameraPermission returns true when granted', () async {
+    expect(await platform.checkCameraPermission(), true);
+  });
+
+  test('checkCameraPermission returns false when null', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (MethodCall methodCall) async => null,
+    );
+    expect(await platform.checkCameraPermission(), false);
   });
 }

@@ -36,14 +36,16 @@ class PoseLandmarkPoint {
   }
 }
 
-/// Model for a detected pose with landmarks
+/// Model for a detected pose with landmarks and optional FPS
 class PoseLandMarker {
   final int timestampMs;
   final List<PoseLandmarkPoint> landmarks;
+  final double? fps; // <- إضافة fps
 
   PoseLandMarker({
     required this.timestampMs,
     required this.landmarks,
+    this.fps,
   });
 
   factory PoseLandMarker.fromJson(Map<String, dynamic> json) {
@@ -55,12 +57,12 @@ class PoseLandMarker {
     return PoseLandMarker(
       timestampMs: json['timestampMs'],
       landmarks: landmarks,
+      fps: json['fps']?.toDouble(),
     );
   }
 }
 
 class PoseLandmarker {
-  // Remove method channel - no longer needed
   static const EventChannel _eventChannel =
       EventChannel('pose_landmarker/events');
   static const MethodChannel _channel =
@@ -68,35 +70,60 @@ class PoseLandmarker {
 
   static Stream<PoseLandMarker>? _poseStream;
 
-
+  /// Sets configuration including delegate, model, and confidence thresholds
   static Future<void> setConfig({
     required int delegate, // 0 = CPU, 1 = GPU
     required int model, // 0 = full, 1 = lite, 2 = heavy
+    double minPoseDetectionConfidence = 0.5,
+    double minPoseTrackingConfidence = 0.5,
+    double minPosePresenceConfidence = 0.5,
   }) async {
     await _channel.invokeMethod("setConfig", {
       "delegate": delegate,
       "model": model,
+      "minPoseDetectionConfidence": minPoseDetectionConfidence,
+      "minPoseTrackingConfidence": minPoseTrackingConfidence,
+      "minPosePresenceConfidence": minPosePresenceConfidence,
     });
   }
 
+  /// Switch between front/back camera
   static Future<void> switchCamera() async {
-  await _channel.invokeMethod('switchCamera');
-  
+    await _channel.invokeMethod('switchCamera');
+  }
+
+  /// Get current camera ("front" or "back")
+  static Future<String> getCurrentCamera() async {
+    final camera = await _channel.invokeMethod<String>('getCurrentCamera');
+    return camera ?? "back"; // fallback
+  }
+
+  /// Enable or disable logging on native side
+  static Future<void> setLoggingEnabled(bool enabled) async {
+    await _channel.invokeMethod('setLoggingEnabled', {"enabled": enabled});
+  }
+
+  /// Pause pose detection without stopping the camera
+  static Future<void> pauseDetection() async {
+    await _channel.invokeMethod('pauseAnalysis');
+  }
+
+  /// Resume pose detection while keeping the camera live
+  static Future<void> resumeDetection() async {
+    await _channel.invokeMethod('resumeAnalysis');
   }
 
   /// Provides a broadcast stream of PoseLandMarker results
   static Stream<PoseLandMarker> get poseLandmarkStream {
-    _poseStream ??= _eventChannel
-        .receiveBroadcastStream()
-        .map((event) {
-          try {
-            final Map<String, dynamic> jsonMap = jsonDecode(event);
-            return PoseLandMarker.fromJson(jsonMap);
-          } catch (e) {
-            print('PoseLandmarker: Error parsing event: $e');
-            rethrow;
-          }
-        });
+    _poseStream ??= _eventChannel.receiveBroadcastStream().map((event) {
+      try {
+        final Map<String, dynamic> jsonMap = jsonDecode(event);
+        return PoseLandMarker.fromJson(jsonMap);
+      } catch (e) {
+        print('PoseLandmarker: Error parsing event: $e');
+        rethrow;
+      }
+    });
     return _poseStream!;
   }
 }

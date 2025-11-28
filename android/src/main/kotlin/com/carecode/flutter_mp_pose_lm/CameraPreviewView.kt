@@ -1,49 +1,56 @@
 package com.carecode.flutter_mp_pose_lm
 
-import android.content.Context
+import android.app.Activity
 import android.view.View
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.camera.core.Preview
-import androidx.camera.core.CameraSelector
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
 import io.flutter.plugin.platform.PlatformView
 
-class CameraPreview(context: Context) : PlatformView, LifecycleOwner {
-    private val previewView: PreviewView = PreviewView(context)
-    private val lifecycleRegistry = LifecycleRegistry(this)
+class CameraPreview(private val activity: Activity) : PlatformView {
+
+    private val previewView: PreviewView = PreviewView(activity)
+    private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
     init {
-        lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        startCamera()
+    }
 
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+    private fun startCamera() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(activity)
+
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(previewView.surfaceProvider)
-            }
 
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            val preview = Preview.Builder().build()
+            preview.setSurfaceProvider(previewView.surfaceProvider)
 
             try {
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
-                    this, // this is now a valid LifecycleOwner
+                    activity as androidx.lifecycle.LifecycleOwner,
                     cameraSelector,
                     preview
                 )
-                lifecycleRegistry.currentState = Lifecycle.State.RESUMED
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-        }, ContextCompat.getMainExecutor(context))
+
+        }, ContextCompat.getMainExecutor(activity))
     }
 
-    override val lifecycle: Lifecycle
-        get() = lifecycleRegistry
+    fun switchCamera() {
+        cameraSelector =
+            if (cameraSelector == CameraSelector.DEFAULT_BACK_CAMERA)
+                CameraSelector.DEFAULT_FRONT_CAMERA
+            else
+                CameraSelector.DEFAULT_BACK_CAMERA
+
+        startCamera()
+    }
+
     override fun getView(): View = previewView
     override fun dispose() {}
 }

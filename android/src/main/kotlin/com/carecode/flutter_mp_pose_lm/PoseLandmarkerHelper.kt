@@ -2,7 +2,7 @@
  * Copyright 2023 The TensorFlow Authors. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
+ * You may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
  *       http://www.apache.org/licenses/LICENSE-2.0
@@ -31,6 +31,7 @@ import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker
 import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
+import java.util.concurrent.atomic.AtomicBoolean
 
 class PoseLandmarkerHelper(
     var minPoseDetectionConfidence: Float = DEFAULT_POSE_DETECTION_CONFIDENCE,
@@ -40,9 +41,9 @@ class PoseLandmarkerHelper(
     var currentDelegate: Int = DELEGATE_GPU,
     var runningMode: RunningMode = RunningMode.IMAGE,
     val context: Context,
+
     // this listener is only used when running in RunningMode.LIVE_STREAM
     val poseLandmarkerHelperListener: LandmarkerListener? = null
-
 ) {
 
     // For this example this needs to be a var so it can be reset on changes.
@@ -50,14 +51,26 @@ class PoseLandmarkerHelper(
     private var poseLandmarker: PoseLandmarker? = null
     private var bitmapBuffer: Bitmap? = null
     private var rotatedBitmap: Bitmap? = null
+    private val isClosed = AtomicBoolean(false)
+    private val yuvToRgbConverter by lazy { YuvToRgbConverter(context) }
 
     init {
         setupPoseLandmarker()
     }
 
     fun clearPoseLandmarker() {
-        poseLandmarker?.close()
-        poseLandmarker = null
+        // Mark as closed so detectLiveStream stops doing work
+        if (!isClosed.compareAndSet(false, true)) {
+            return
+        }
+
+        try {
+            poseLandmarker?.close()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error closing poseLandmarker", t)
+        } finally {
+            poseLandmarker = null
+        }
     }
 
     // Return running status of PoseLandmarkerHelper
@@ -152,42 +165,106 @@ class PoseLandmarkerHelper(
         }
     }
 
+    // ------------------------------
+    // New method to dynamically update delegate, model, and detection confidence
+    fun updateConfig(
+        delegate: Int? = null,
+        model: Int? = null,
+        minPoseDetectionConfidence: Float? = null
+    ) {
+        delegate?.let { currentDelegate = it }
+        model?.let { currentModel = it }
+        minPoseDetectionConfidence?.let { this.minPoseDetectionConfidence = it }
+
+        clearPoseLandmarker()
+        setupPoseLandmarker()
+    }
+    // ------------------------------
+
     // Convert the ImageProxy to MP Image and feed it to PoselandmakerHelper.
     fun detectLiveStream(imageProxy: ImageProxy, isFrontCamera: Boolean) {
         if (runningMode != RunningMode.LIVE_STREAM) {
-            throw IllegalArgumentException("...")
+            imageProxy.close()
+            throw IllegalArgumentException("Running mode must be LIVE_STREAM to call detectLiveStream")
         }
+
+        // If we are already closed / clearing, don't process this frame
+        if (isClosed.get()) {
+            imageProxy.close()
+            return
+        }
+
         val frameTime = SystemClock.uptimeMillis()
-    
-        if (bitmapBuffer == null || bitmapBuffer?.width != imageProxy.width || bitmapBuffer?.height != imageProxy.height) {
-            bitmapBuffer = Bitmap.createBitmap(imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888)
-        }
-    
-        val bitmap = bitmapBuffer!!
-    
-        val yuvToRgbConverter = YuvToRgbConverter(context)
-        yuvToRgbConverter.yuvToRgb(imageProxy.image!!, bitmap)
-        imageProxy.close()
-    
-        val matrix = Matrix().apply {
-            postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
-            if (isFrontCamera) {
-                postScale(-1f, 1f, imageProxy.width.toFloat(), imageProxy.height.toFloat())
+
+        try {
+            // 1) Prepare bitmap buffer
+            if (bitmapBuffer == null ||
+                bitmapBuffer?.width != imageProxy.width ||
+                bitmapBuffer?.height != imageProxy.height
+            ) {
+                bitmapBuffer = Bitmap.createBitmap(
+                    imageProxy.width,
+                    imageProxy.height,
+                    Bitmap.Config.ARGB_8888
+                )
             }
+
+            val bitmap = bitmapBuffer!!
+
+            // 2) Convert YUV -> RGB using a reusable converter
+            val image = imageProxy.image
+            if (image == null) {
+                // no usable image, just drop frame
+                return
+            }
+
+            yuvToRgbConverter.yuvToRgb(image, bitmap)
+
+            // 3) Read rotation & dimensions BEFORE closing the proxy
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees.toFloat()
+            val width = imageProxy.width
+            val height = imageProxy.height
+
+            // We have all info needed now; safe to close
+            imageProxy.close()
+
+            // 4) Build transform matrix
+            val matrix = Matrix().apply {
+                postRotate(rotationDegrees)
+                if (isFrontCamera) {
+                    // Mirror around center
+                    postScale(-1f, 1f, width / 2f, height / 2f)
+                }
+            }
+
+            // 5) Prepare rotated bitmap
+            rotatedBitmap = Bitmap.createBitmap(
+                bitmap,
+                0,
+                0,
+                bitmap.width,
+                bitmap.height,
+                matrix,
+                true
+            )
+
+            val mpImage = BitmapImageBuilder(rotatedBitmap!!).build()
+
+            // 6) Last safety check before calling native
+            if (isClosed.get()) return
+
+            detectAsync(mpImage, frameTime)
+        } catch (t: Throwable) {
+            // ALWAYS make sure proxy is closed if something fails before we reached imageProxy.close()
+            try {
+                if (isClosed.get()) {
+                    imageProxy.close()
+                }
+            } catch (_: Throwable) { /* ignore secondary errors */ }
+
+            Log.e("PoseLandmarkerHelper", "Error in detectLiveStream", t)
         }
-    
-        if (rotatedBitmap == null || rotatedBitmap?.width != bitmap.width || rotatedBitmap?.height != bitmap.height) {
-            rotatedBitmap = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-        }
-    
-        rotatedBitmap = Bitmap.createBitmap(
-            bitmap, 0, 0, bitmap.width, bitmap.height,
-            matrix, true
-        )
-    
-        val mpImage = BitmapImageBuilder(rotatedBitmap!!).build()
-        detectAsync(mpImage, frameTime)
-    }
+}
 
     // Run pose landmark using MediaPipe Pose Landmarker API
     @VisibleForTesting
@@ -260,7 +337,7 @@ class PoseLandmarkerHelper(
                     poseLandmarker?.detectForVideo(mpImage, timestampMs)
                         ?.let { detectionResult ->
                             resultList.add(detectionResult)
-                        } ?: {
+                        } ?: run {
                         didErrorOccurred = true
                         poseLandmarkerHelperListener?.onError(
                             "ResultBundle could not be returned" +
