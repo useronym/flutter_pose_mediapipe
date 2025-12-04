@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:flutter_mp_pose_landmarker_example/main.dart' as app; // import your main.dart
+import 'package:flutter_mp_pose_landmarker_example/main.dart'
+    as app; // import your main.dart
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -12,7 +13,8 @@ void main() {
     testWidgets('Launch app, switch camera, toggle logging', (tester) async {
       // Launch the app
       app.main();
-      await tester.pumpAndSettle(const Duration(seconds: 5)); // Time to accept the Permission Request 
+      await tester.pumpAndSettle(
+          const Duration(seconds: 5)); // Time to accept the Permission Request
       await tester.pumpAndSettle();
 
       // Check initial widgets
@@ -40,7 +42,6 @@ void main() {
       // Tap Apply button
       await tester.tap(find.text('Apply'));
       await tester.pumpAndSettle();
-
     });
   });
 }

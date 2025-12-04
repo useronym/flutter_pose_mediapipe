@@ -5,11 +5,13 @@ import 'package:flutter_mp_pose_landmarker/flutter_mp_pose_landmarker_method_cha
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  MethodChannelFlutterMpPoseLandmarker platform = MethodChannelFlutterMpPoseLandmarker();
+  MethodChannelFlutterMpPoseLandmarker platform =
+      MethodChannelFlutterMpPoseLandmarker();
   const MethodChannel channel = MethodChannel('flutter_mp_pose_landmarker');
 
   setUp(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
       channel,
       (MethodCall methodCall) async {
         if (methodCall.method == 'getPlatformVersion') {
@@ -23,7 +25,8 @@ void main() {
   });
 
   tearDown(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null);
   });
 
   test('getPlatformVersion returns correct value', () async {
@@ -35,7 +38,8 @@ void main() {
   });
 
   test('checkCameraPermission returns false when null', () async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
       channel,
       (MethodCall methodCall) async => null,
     );
