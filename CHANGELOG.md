@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.1.4] - 2026-03-13
+
+### Added
+#### Security & Anti-Spoofing
+- **Emulator Detection System**
+  - Created `EmulatorDetector` utility class to identify Android emulators at runtime
+  - Provides boolean flag for emulator presence
+
+- **Mock Pose Manager**
+  - Implemented `MockPoseManager` class as safe fallback for emulator environments
+  - Prevents pose analysis manipulation on virtual devices
+  - Returns mock/empty pose data to maintain API consistency
+  - Implements `IPoseManager` interface for seamless integration
+
+#### Architecture Improvements
+- **IPoseManager Interface**
+  - Created abstraction layer for pose management
+  - Defined contract methods:
+    - `setEventSink(events: EventChannel.EventSink?)`
+    - `enableAnalysis()`
+    - `disableAnalysis()`
+    - `pauseAnalysis()`
+    - `resumeAnalysis()`
+    - `dispose()`
+  - Enables strategy pattern for real vs. mock pose managers
+
+### Changed
+
+#### CameraManager Refactoring
+- **Interface Implementation** (`CameraManager.kt`)
+  - Implemented `IPoseManager` interface
+  - Added `override` modifiers to interface methods:
+    - Line 179: `override fun setEventSink()`
+    - Line 183: `override fun enableAnalysis()`
+    - Line 212: `override fun disableAnalysis()`
+    - Line 219: `override fun pauseAnalysis()`
+    - Line 225: `override fun resumeAnalysis()`
+    - Line 231: `override fun dispose()`
+  - Ensures compile-time contract enforcement
+
+#### Plugin Initialization
+- **FlutterMpPoseLandmarkerPlugin Updates** (`FlutterMpPoseLandmarkerPlugin.kt`)
+  - Line 117: Added emulator detection on plugin initialization
+```kotlin
+    poseManager = if (EmulatorDetector.isEmulator(context)) {
+        MockPoseManager()
+    } else {
+        CameraManager(context, textureRegistry)
+    }
+```
+  - Line 131: Updated pose manager references to use abstracted interface
+  - Dynamically selects real or mock manager based on device type
+
+### Security Impact
+- **Data Integrity Protection**
+  - Prevents spoofing of pose landmark data on emulated devices
+  - Ensures exercises are performed on real devices
+  - Protects against automated bot manipulation in fitness apps
+  - Maintains trust in pose tracking for medical/therapeutic use cases
+  - Making Sure app devs has no problem working with emulators with the mock service
+
+### Technical Details
+- **Files Modified:**
+  - `android/src/main/kotlin/com/carecode/flutter_mp_pose_lm/CameraManager.kt`
+  - `android/src/main/kotlin/com/carecode/flutter_mp_pose_lm/FlutterMpPoseLandmarkerPlugin.kt`
+  
+- **Files Added:**
+  - `android/src/main/kotlin/com/carecode/flutter_mp_pose_lm/IPoseManager.kt` (interface)
+  - `android/src/main/kotlin/com/carecode/flutter_mp_pose_lm/MockPoseManager.kt`
+  - `android/src/main/kotlin/com/carecode/flutter_mp_pose_lm/EmulatorDetector.kt`
+
+- **Dependencies:**
+  - No new external dependencies required
+  - Uses Android Build class for device detection
+  - Compatible with existing MediaPipe pose detection pipeline
+
+### Breaking Changes
+- None - Changes are backward compatible with existing API
+
+### Migration Guide
+No migration required. The changes are transparent to Flutter/Dart layer consumers.
+Existing code will continue to work without modifications.
+
+
 ## [0.1.3] - 2025-12-04
 ### Fixed
 - Removed leftover `print()` debug statements.

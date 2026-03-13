@@ -22,7 +22,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
 
 
-class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.LandmarkerListener {
+class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.LandmarkerListener, IPoseManager{
 
     data class Landmark(
         val x: Float,
@@ -176,11 +176,11 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
         }, ContextCompat.getMainExecutor(activity))
     }
 
-    fun setEventSink(sink: EventChannel.EventSink?) {
+    override fun setEventSink(sink: EventChannel.EventSink?) {
         eventSink.set(sink)
     }
 
-    fun enableAnalysis() {
+    override fun enableAnalysis() {
         isAnalysisEnabled = true
         imageAnalysis.setAnalyzer(executor) { imageProxy ->
             if (!isAnalysisEnabled) {
@@ -209,26 +209,26 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
         }
     }
 
-    fun disableAnalysis() {
+    override fun disableAnalysis() {
         isAnalysisEnabled = false
         imageAnalysis.clearAnalyzer()
     }
 
     // -----------------------------
     // Pause pose detection without stopping the camera
-    fun pauseAnalysis() {
+    override fun pauseAnalysis() {
         isAnalysisEnabled = false
         if (isLoggingEnabled) Log.d("CameraManager", "Pose analysis paused")
     }
 
     // Resume pose detection while keeping the camera live
-    fun resumeAnalysis() {
+    override fun resumeAnalysis() {
         isAnalysisEnabled = true
         if (isLoggingEnabled) Log.d("CameraManager", "Pose analysis resumed")
     }
     // -----------------------------
 
-    fun dispose() {
+    override fun dispose() {
         disableAnalysis()
         poseLandmarkerHelper.clearPoseLandmarker()
         executor.shutdown()
