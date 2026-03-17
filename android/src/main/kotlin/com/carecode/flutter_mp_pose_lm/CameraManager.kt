@@ -270,4 +270,12 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
             eventSink.get()?.error("POSE_ERROR", error, mapOf("code" to errorCode))
         }
     }
+    override  fun releaseCamera(){
+        disableAnalysis();
+        try{
+            ProcessCameraProvider.getInstance(activity).get().unbindAll()
+        }catch (e:Exception){
+            if(isLoggingEnabled) Log.e("CameraManager", "Failed to release camera provider", e)
+        }
+    }
 }

@@ -68,6 +68,14 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
                     (poseManager as? CameraManager)?.switchCamera()
                     result.success(null)
                 }
+                "releaseCamera" -> {
+                    poseManager?.releaseCamera()
+                    result.success(null)
+                }
+
+                "restoreCamera" -> {
+                    startCameraIfAvailable()
+                }
 
                 "checkCameraPermission" -> {
                     val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
@@ -115,7 +123,7 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
             Log.d("PoseLandmarkerPlugin", "Emulator detected — using MockPoseManager")
             MockPoseManager()
         } else {
-            CameraManager(activity!!).apply { startCamera() }
+            CameraManager(activity!!)
         }
 
         platformViewRegistry?.registerViewFactory("camera_preview_view",
@@ -140,13 +148,19 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         poseManager?.apply {
+            val cameraManager = poseManager as? CameraManager
             setEventSink(events)
+            startCameraIfAvailable() // only now does it touch the hardware
             enableAnalysis()
         }
     }
 
+    private fun startCameraIfAvailable() {
+        (poseManager as? CameraManager)?.startCamera()
+    }
     override fun onCancel(arguments: Any?) {
         poseManager?.disableAnalysis()
+        (poseManager as? CameraManager)?.releaseCamera()
     }
 
     override fun onDetachedFromActivity() {

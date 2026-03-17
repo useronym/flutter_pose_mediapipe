@@ -35,19 +35,21 @@ class PoseLandmarkerView extends StatefulWidget {
 }
 
 class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
-  int delegate = 0; // 0=CPU, 1=GPU
-  int model = 1; // 0=Full, 1=Lite, 2=Heavy
-  // Confidence parameters
+  int delegate = 0;
+  int model = 1;
+
   double _minPoseDetectionConfidence = 0.5;
   double _minPoseTrackingConfidence = 0.5;
   double _minPosePresenceConfidence = 0.5;
 
   List<PoseLandmarkPoint> _landmarks = [];
-  late StreamSubscription<PoseLandMarker> _poseSubscription;
+
+  // Nullable so dispose() is safe even if stream never started
+  StreamSubscription<PoseLandMarker>? _poseSubscription;
 
   bool _detectionPaused = false;
   bool _loggingEnabled = true;
-  String _cameraLens = "Back";
+  String _cameraLens = 'Back';
 
   int _fps = 0;
   int _frameCount = 0;
@@ -73,45 +75,43 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
       minPosePresenceConfidence: _minPosePresenceConfidence,
     );
 
+    // Subscribing here triggers onListen in the plugin → startCamera() runs.
+    // Cancelling in dispose() triggers onCancel → releaseCamera() runs,
+    // freeing the hardware so other packages like camera can use it freely.
     _poseSubscription = PoseLandmarker.poseLandmarkStream.listen((pose) {
-      if (!_detectionPaused) {
-        setState(() {
-          _landmarks = pose.landmarks;
-
-          // FPS calculation
-          _frameCount++;
-          int now = DateTime.now().millisecondsSinceEpoch;
-          if (now - _lastTimestamp >= 1000) {
-            _fps = _frameCount;
-            _frameCount = 0;
-            _lastTimestamp = now;
-            if (_loggingEnabled) print("FPS: $_fps");
-          }
-        });
-      }
+      if (_detectionPaused || !mounted) return;
+      setState(() {
+        _landmarks = pose.landmarks;
+        _frameCount++;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastTimestamp >= 1000) {
+          _fps = _frameCount;
+          _frameCount = 0;
+          _lastTimestamp = now;
+          if (_loggingEnabled) debugPrint('FPS: $_fps');
+        }
+      });
     });
   }
 
   void _switchCamera() {
     PoseLandmarker.switchCamera();
     setState(() {
-      _cameraLens = _cameraLens == "Back" ? "Front" : "Back";
+      _cameraLens = _cameraLens == 'Back' ? 'Front' : 'Back';
     });
-    if (_loggingEnabled) print("Switched camera to $_cameraLens");
+    if (_loggingEnabled) debugPrint('Switched camera to $_cameraLens');
   }
 
   void _toggleLogging() {
-    setState(() {
-      _loggingEnabled = !_loggingEnabled;
-    });
-    print("Logging: $_loggingEnabled");
+    setState(() => _loggingEnabled = !_loggingEnabled);
+    debugPrint('Logging: $_loggingEnabled');
   }
 
   void _pauseResumeDetection() {
-    setState(() {
-      _detectionPaused = !_detectionPaused;
-    });
-    print(_detectionPaused ? "Detection Paused" : "Detection Resumed");
+    setState(() => _detectionPaused = !_detectionPaused);
+    if (_loggingEnabled) {
+      debugPrint(_detectionPaused ? 'Detection paused' : 'Detection resumed');
+    }
   }
 
   void _applyConfidenceSettings() {
@@ -132,15 +132,20 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
       );
 
       if (_loggingEnabled) {
-        print(
-            "Updated confidence: detection=$_minPoseDetectionConfidence, tracking=$_minPoseTrackingConfidence, presence=$_minPosePresenceConfidence");
+        debugPrint('Confidence updated — '
+            'detection: $_minPoseDetectionConfidence, '
+            'tracking: $_minPoseTrackingConfidence, '
+            'presence: $_minPosePresenceConfidence');
       }
     });
   }
 
   @override
   void dispose() {
-    _poseSubscription.cancel();
+    // Cancelling the subscription triggers onCancel in the plugin,
+    // which calls releaseCamera() → ProcessCameraProvider.unbindAll()
+    // → hardware is free for the camera package or any other consumer.
+    _poseSubscription?.cancel();
     _detectionController.dispose();
     _trackingController.dispose();
     _presenceController.dispose();
@@ -156,19 +161,19 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
             FloatingActionButton(
-              heroTag: "switchCamera",
-              child: const Icon(Icons.cameraswitch),
+              heroTag: 'switchCamera',
               onPressed: _switchCamera,
+              child: const Icon(Icons.cameraswitch),
             ),
             FloatingActionButton(
-              heroTag: "pauseResume",
-              child: Icon(_detectionPaused ? Icons.play_arrow : Icons.pause),
+              heroTag: 'pauseResume',
               onPressed: _pauseResumeDetection,
+              child: Icon(_detectionPaused ? Icons.play_arrow : Icons.pause),
             ),
             FloatingActionButton(
-              heroTag: "loggingToggle",
-              child: const Icon(Icons.bug_report),
+              heroTag: 'loggingToggle',
               onPressed: _toggleLogging,
+              child: const Icon(Icons.bug_report),
             ),
           ],
         ),
@@ -185,7 +190,7 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
             child: Container(
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.white, width: 2),
-                color: Colors.black.withOpacity(0.3),
+                color: Colors.black.withAlpha(76),
               ),
               child: CustomPaint(
                 painter: LandmarkPainter(_landmarks),
@@ -198,34 +203,14 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  color: Colors.black54,
-                  child: Text(
-                    'Landmarks: ${_landmarks.length}',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  color: Colors.black54,
-                  child: Text(
-                    'Camera: $_cameraLens',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  color: Colors.black54,
-                  child: Text(
-                    'FPS: $_fps',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ),
+                _StatChip('Landmarks: ${_landmarks.length}'),
+                const SizedBox(height: 4),
+                _StatChip('Camera: $_cameraLens'),
+                const SizedBox(height: 4),
+                _StatChip('FPS: $_fps'),
               ],
             ),
           ),
-          // Confidence controls
           Positioned(
             bottom: 16,
             left: 16,
@@ -241,12 +226,12 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
                         child: TextField(
                           controller: _detectionController,
                           decoration: const InputDecoration(
-                            labelText: "Detection Confidence",
+                            labelText: 'Detection Confidence',
                             fillColor: Colors.white,
                             filled: true,
                           ),
-                          keyboardType:
-                              TextInputType.numberWithOptions(decimal: true),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -254,12 +239,12 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
                         child: TextField(
                           controller: _trackingController,
                           decoration: const InputDecoration(
-                            labelText: "Tracking Confidence",
+                            labelText: 'Tracking Confidence',
                             fillColor: Colors.white,
                             filled: true,
                           ),
-                          keyboardType:
-                              TextInputType.numberWithOptions(decimal: true),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -267,12 +252,12 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
                         child: TextField(
                           controller: _presenceController,
                           decoration: const InputDecoration(
-                            labelText: "Presence Confidence",
+                            labelText: 'Presence Confidence',
                             fillColor: Colors.white,
                             filled: true,
                           ),
-                          keyboardType:
-                              TextInputType.numberWithOptions(decimal: true),
+                          keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true),
                         ),
                       ),
                     ],
@@ -280,7 +265,7 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
                   const SizedBox(height: 8),
                   ElevatedButton(
                     onPressed: _applyConfidenceSettings,
-                    child: const Text("Apply"),
+                    child: const Text('Apply'),
                   ),
                 ],
               ),
@@ -288,6 +273,24 @@ class _PoseLandmarkerViewState extends State<PoseLandmarkerView> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────
+
+class _StatChip extends StatelessWidget {
+  final String text;
+  const _StatChip(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      color: Colors.black54,
+      child: Text(text, style: const TextStyle(color: Colors.white)),
     );
   }
 }
@@ -305,40 +308,23 @@ class NativeCameraPreview extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────
+//  Landmark painter
+// ─────────────────────────────────────────────
+
 class LandmarkPainter extends CustomPainter {
   final List<PoseLandmarkPoint> landmarks;
-  LandmarkPainter(this.landmarks);
+  const LandmarkPainter(this.landmarks);
 
   static const List<List<int>> connections = [
-    [0, 1],
-    [1, 2],
-    [2, 3],
-    [3, 7],
-    [0, 4],
-    [4, 5],
-    [5, 6],
-    [6, 8],
+    [0, 1], [1, 2], [2, 3], [3, 7],
+    [0, 4], [4, 5], [5, 6], [6, 8],
     [9, 10],
-    [11, 12],
-    [11, 13],
-    [13, 15],
-    [12, 14],
-    [14, 16],
-    [11, 23],
-    [12, 24],
-    [23, 24],
-    [23, 25],
-    [25, 27],
-    [24, 26],
-    [26, 28],
-    [27, 31],
-    [28, 32],
-    [15, 17],
-    [16, 18],
-    [17, 19],
-    [18, 20],
-    [19, 21],
-    [20, 22],
+    [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+    [11, 23], [12, 24], [23, 24],
+    [23, 25], [25, 27], [24, 26], [26, 28],
+    [27, 31], [28, 32],
+    [15, 17], [16, 18], [17, 19], [18, 20], [19, 21], [20, 22],
   ];
 
   @override
@@ -351,7 +337,7 @@ class LandmarkPainter extends CustomPainter {
       ..color = Colors.blue
       ..strokeWidth = 2;
 
-    for (var c in connections) {
+    for (final c in connections) {
       if (c[0] < landmarks.length && c[1] < landmarks.length) {
         final a = landmarks[c[0]];
         final b = landmarks[c[1]];
@@ -363,7 +349,7 @@ class LandmarkPainter extends CustomPainter {
       }
     }
 
-    for (var lm in landmarks) {
+    for (final lm in landmarks) {
       canvas.drawCircle(
         Offset(lm.x * size.width, lm.y * size.height),
         4,
