@@ -10,4 +10,5 @@ interface IPoseManager {
     fun pauseAnalysis()
     fun resumeAnalysis()
     fun dispose()
+    fun releaseCamera()
 }

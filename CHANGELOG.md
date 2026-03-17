@@ -1,4 +1,34 @@
 # Changelog
+## [0.1.5] - 2026-03-17
+
+### Fixed
+- Camera is no longer initialized eagerly on activity attach. It now starts
+  only when a Dart listener subscribes to `poseLandmarkStream` (`onListen`)
+  and is fully released when the subscription is cancelled (`onCancel`).
+  This fixes a conflict where the plugin held the camera hardware even when
+  no pose detection was active, preventing the `camera` package and other
+  consumers from opening the camera on other screens.
+
+### Changed
+- `CameraManager.startCamera()` is no longer called inside `onAttachedToActivity`.
+  The plugin now only constructs the manager at attach time and defers all
+  hardware access to stream subscription time.
+- `onCancel` now calls `releaseCamera()` (unbinds `ProcessCameraProvider`)
+  in addition to `disableAnalysis()`, ensuring the hardware is fully freed.
+- Stream listener guards added (`!mounted` check) to prevent `setState`
+  calls after widget disposal.
+- `IPoseManager` extended with `releaseCamera()` to formalize the release
+  contract across both `CameraManager` and `MockPoseManager`.
+- `MockPoseManager.releaseCamera()` implemented as a no-op.
+
+### Example app
+- `_poseSubscription` changed from `late` to nullable (`?`) so `dispose()`
+  is safe even if the stream was never started.
+- Replaced deprecated `withOpacity()` calls with `withAlpha()`.
+- Replaced `print()` calls with `debugPrint()`.
+- Repeated stat label containers extracted into a `_StatChip` widget.
+
+
 
 ## [0.1.4] - 2026-03-13
 

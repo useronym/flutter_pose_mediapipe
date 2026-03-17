@@ -88,6 +88,9 @@ class MockPoseManager : IPoseManager {
         }
     }
 
+    override fun releaseCamera() { /* nothing to release */ }
+
+
     private fun buildMockLandmarks(armSwing: Float): List<FloatArray> {
         return listOf(
             floatArrayOf(0.50f, 0.10f, 0f),  // 0  nose
