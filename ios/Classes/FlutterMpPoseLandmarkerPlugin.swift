@@ -105,6 +105,16 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
             let status = AVCaptureDevice.authorizationStatus(for: .video)
             result(status == .authorized)
 
+        case "requestCameraPermission":
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                DispatchQueue.main.async {
+                    result(granted)
+                }
+            }
+
+        case "isPreviewMirrored":
+            result(cameraManager?.previewIsMirrored ?? false)
+
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -114,6 +124,7 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
 
     public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         self.eventSink = events
+        print("[Plugin] onListen — cameraManager: \(cameraManager != nil)")
 
         // Wire camera manager results to event sink
         cameraManager?.onResults = { [weak self] json in

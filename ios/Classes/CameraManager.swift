@@ -23,7 +23,10 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     var isAnalysisEnabled = false
     var isLoggingEnabled = false
 
-    private var poseLandmarkerHelper: PoseLandmarkerHelper
+    private var poseLandmarkerHelper: PoseLandmarkerHelper?
+
+    /// Whether the preview layer is currently mirroring (front camera on real device).
+    private(set) var previewIsMirrored: Bool = false
 
     // FPS tracking
     private var lastFrameTime: CFTimeInterval = 0
@@ -35,22 +38,8 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
 
     // MARK: - Init
 
-    init(
-        currentDelegate: Int = PoseLandmarkerHelper.delegateGPU,
-        currentModel: Int = PoseLandmarkerHelper.modelLite,
-        minPoseDetectionConfidence: Float = PoseLandmarkerHelper.defaultPoseDetectionConfidence,
-        minPoseTrackingConfidence: Float = PoseLandmarkerHelper.defaultPoseTrackingConfidence,
-        minPosePresenceConfidence: Float = PoseLandmarkerHelper.defaultPosePresenceConfidence
-    ) {
-        poseLandmarkerHelper = PoseLandmarkerHelper(
-            minPoseDetectionConfidence: minPoseDetectionConfidence,
-            minPoseTrackingConfidence: minPoseTrackingConfidence,
-            minPosePresenceConfidence: minPosePresenceConfidence,
-            currentModel: currentModel,
-            currentDelegate: currentDelegate
-        )
+    override init() {
         super.init()
-        poseLandmarkerHelper.delegate = self
     }
 
     // MARK: - Configuration
@@ -62,13 +51,18 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
         minPoseTrackingConfidence: Float,
         minPosePresenceConfidence: Float
     ) {
-        poseLandmarkerHelper.updateConfig(
-            delegate: delegate,
-            model: model,
+        poseLandmarkerHelper?.clearPoseLandmarker()
+
+        let helper = PoseLandmarkerHelper(
             minPoseDetectionConfidence: minPoseDetectionConfidence,
             minPoseTrackingConfidence: minPoseTrackingConfidence,
-            minPosePresenceConfidence: minPosePresenceConfidence
+            minPosePresenceConfidence: minPosePresenceConfidence,
+            currentModel: model,
+            currentDelegate: delegate
         )
+        helper.delegate = self
+        helper.setupPoseLandmarker()
+        poseLandmarkerHelper = helper
     }
 
     // MARK: - Camera Setup
@@ -94,9 +88,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
             for: .video,
             position: currentCameraPosition
         ) else {
-            if isLoggingEnabled {
-                print("[CameraManager] No camera found for position \(currentCameraPosition.rawValue)")
-            }
+            print("[CameraManager] No camera found for position \(currentCameraPosition.rawValue)")
             captureSession.commitConfiguration()
             return
         }
@@ -107,9 +99,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
                 captureSession.addInput(input)
             }
         } catch {
-            if isLoggingEnabled {
-                print("[CameraManager] Failed to create camera input: \(error)")
-            }
+            print("[CameraManager] Failed to create camera input: \(error)")
             captureSession.commitConfiguration()
             return
         }
@@ -134,11 +124,15 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
             videoOutput?.setSampleBufferDelegate(nil, queue: nil)
         }
 
-        // Mirror front camera
+        // Configure video connection — don't mirror the video data output,
+        // let the preview layer handle mirroring. Landmarks stay in raw space.
         if let connection = videoOutput?.connection(with: .video) {
-            connection.isVideoMirrored = (currentCameraPosition == .front)
+            connection.isVideoMirrored = false
             connection.videoRotationAngle = 90 // portrait orientation
         }
+
+        // Track whether the preview layer will mirror (front camera only)
+        previewIsMirrored = (currentCameraPosition == .front)
 
         captureSession.commitConfiguration()
 
@@ -191,7 +185,8 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
 
     func dispose() {
         releaseCamera()
-        poseLandmarkerHelper.clearPoseLandmarker()
+        poseLandmarkerHelper?.clearPoseLandmarker()
+        poseLandmarkerHelper = nil
     }
 
     // MARK: - Preview Layer
@@ -220,7 +215,6 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
             "fps": fps
         ]
 
-        // Serialize to JSON
         guard let jsonData = try? JSONSerialization.data(withJSONObject: resultMap),
               let json = String(data: jsonData, encoding: .utf8) else {
             return
@@ -232,6 +226,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     }
 
     func poseLandmarkerHelper(_ helper: PoseLandmarkerHelper, didFailWithError error: String) {
+        print("[CameraManager] onError: \(error)")
         DispatchQueue.main.async { [weak self] in
             self?.onError?(error, 0)
         }
@@ -257,7 +252,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         lastFrameTime = currentTime
 
         // Feed to MediaPipe (zero-copy: MPImage wraps CMSampleBuffer directly)
+        guard let helper = poseLandmarkerHelper else { return }
         let timestampMs = Int(Date().timeIntervalSince1970 * 1000)
-        poseLandmarkerHelper.detectAsync(sampleBuffer: sampleBuffer, timestampMs: timestampMs)
+        helper.detectAsync(sampleBuffer: sampleBuffer, timestampMs: timestampMs)
     }
 }

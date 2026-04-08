@@ -46,9 +46,14 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
             FrameLayout.LayoutParams.MATCH_PARENT
         )
         scaleType = PreviewView.ScaleType.FILL_CENTER
+        // COMPATIBLE uses TextureView, which renders correctly inside Flutter's AndroidView
+        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
     }
 
-    private var currentLensFacing: Int = CameraSelector.LENS_FACING_BACK
+    private var currentLensFacing: Int = CameraSelector.LENS_FACING_FRONT
+    // True when the camera was bound with a known front-facing selector,
+    // meaning PreviewView mirrors the feed.
+    private var previewIsMirrored: Boolean = false
     private val eventSink = AtomicReference<EventChannel.EventSink?>(null)
     private lateinit var imageAnalysis: ImageAnalysis
     private var isAnalysisEnabled = false
@@ -62,11 +67,23 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
     private var lastFrameTime = SystemClock.elapsedRealtime()
     private var fps = 0.0
 
-    private var poseLandmarkerHelper = PoseLandmarkerHelper(
-        context = activity,
-        runningMode = com.google.mediapipe.tasks.vision.core.RunningMode.LIVE_STREAM,
-        poseLandmarkerHelperListener = this
-    )
+    // Lazily initialized — do NOT create in constructor (GPU delegate crashes on emulators)
+    private var poseLandmarkerHelper: PoseLandmarkerHelper? = null
+
+    private fun ensureHelper(): PoseLandmarkerHelper {
+        var helper = poseLandmarkerHelper
+        if (helper == null) {
+            Log.d("CameraManager", "Creating PoseLandmarkerHelper (CPU delegate)")
+            helper = PoseLandmarkerHelper(
+                context = activity,
+                runningMode = com.google.mediapipe.tasks.vision.core.RunningMode.LIVE_STREAM,
+                poseLandmarkerHelperListener = this,
+                currentDelegate = PoseLandmarkerHelper.DELEGATE_CPU
+            )
+            poseLandmarkerHelper = helper
+        }
+        return helper
+    }
 
     fun setConfig(
         delegate: Int,
@@ -75,8 +92,9 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
         minPoseTrackingConfidence: Float = PoseLandmarkerHelper.DEFAULT_POSE_TRACKING_CONFIDENCE,
         minPosePresenceConfidence: Float = PoseLandmarkerHelper.DEFAULT_POSE_PRESENCE_CONFIDENCE
     ) {
-        // Dispose the old helper
-        poseLandmarkerHelper.clearPoseLandmarker()
+        Log.d("CameraManager", "setConfig: delegate=$delegate, model=$model")
+        // Dispose old helper if it exists
+        poseLandmarkerHelper?.clearPoseLandmarker()
 
         // Create a new one with updated config
         poseLandmarkerHelper = PoseLandmarkerHelper(
@@ -89,6 +107,7 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
             minPoseTrackingConfidence = minPoseTrackingConfidence,
             minPosePresenceConfidence = minPosePresenceConfidence
         )
+        Log.d("CameraManager", "setConfig: PoseLandmarkerHelper created successfully")
     }
 
     fun switchCamera() {
@@ -104,9 +123,15 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
         return currentLensFacing
     }
 
+    fun isPreviewMirrored(): Boolean {
+        return previewIsMirrored
+    }
+
     fun startCamera() {
+        Log.d("CameraManager", "startCamera() called, lensFacing=$currentLensFacing, analysisEnabled=$isAnalysisEnabled")
         val cameraProviderFuture = ProcessCameraProvider.getInstance(activity)
         cameraProviderFuture.addListener({
+            Log.d("CameraManager", "CameraProvider ready, binding to lifecycle")
             try {
                 val cameraProvider = cameraProviderFuture.get()
 
@@ -114,13 +139,13 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
                     .setAspectRatioStrategy(
                         AspectRatioStrategy(
                             AspectRatio.RATIO_4_3,
-                            AspectRatioStrategy.FALLBACK_RULE_NONE
+                            AspectRatioStrategy.FALLBACK_RULE_AUTO
                         )
                     )
                     .setResolutionStrategy(
                         ResolutionStrategy(
                             Size(640, 480),
-                            ResolutionStrategy.FALLBACK_RULE_NONE
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
                         )
                     )
                     .build()
@@ -138,46 +163,39 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
                     .build()
 
                 if (isAnalysisEnabled) {
-                    imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                        if (!isAnalysisEnabled) {
-                            imageProxy.close()
-                            return@setAnalyzer
-                        }
-
-                        // ----- FPS calculation -----
-                        val currentTime = SystemClock.elapsedRealtime()
-                        val deltaTime = currentTime - lastFrameTime
-                        if (deltaTime > 0) {
-                            fps = 1000.0 / deltaTime
-                        }
-                        lastFrameTime = currentTime
-                        // ---------------------------
-
-                        try {
-                            poseLandmarkerHelper.detectLiveStream(
-                                imageProxy,
-                                isFrontCamera = (currentLensFacing == CameraSelector.LENS_FACING_FRONT)
-                            )
-                        } catch (e: Exception) {
-                            if (isLoggingEnabled) Log.e("CameraManager", "Error during analysis", e)
-                            imageProxy.close()
-                        }
-                    }
+                    attachAnalyzer()
                 }
 
-                val cameraSelector = CameraSelector.Builder()
-                    .requireLensFacing(currentLensFacing)
-                    .build()
-
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    activity as LifecycleOwner,
-                    cameraSelector,
-                    preview,
-                    imageAnalysis
-                )
+
+                // Try the requested lens facing first; if it fails (e.g. emulator
+                // cameras report null lensFacing), fall back to any available camera.
+                try {
+                    val preferred = CameraSelector.Builder()
+                        .requireLensFacing(currentLensFacing)
+                        .build()
+                    cameraProvider.bindToLifecycle(
+                        activity as LifecycleOwner,
+                        preferred,
+                        preview,
+                        imageAnalysis
+                    )
+                    previewIsMirrored = (currentLensFacing == CameraSelector.LENS_FACING_FRONT)
+                    Log.d("CameraManager", "Camera bound with lensFacing=$currentLensFacing, mirrored=$previewIsMirrored")
+                } catch (e: Exception) {
+                    Log.w("CameraManager", "Preferred lensFacing=$currentLensFacing failed: ${e.message}")
+                    val fallback = CameraSelector.Builder().build()
+                    cameraProvider.bindToLifecycle(
+                        activity as LifecycleOwner,
+                        fallback,
+                        preview,
+                        imageAnalysis
+                    )
+                    previewIsMirrored = false  // unknown facing → no mirror
+                    Log.d("CameraManager", "Camera bound with fallback (any available), mirrored=false")
+                }
             } catch (e: Exception) {
-                if (isLoggingEnabled) Log.e("CameraManager", "Camera bind failed", e)
+                Log.e("CameraManager", "Camera bind failed", e)
                 activity.runOnUiThread {
                     eventSink.get()?.error("CAMERA_ERROR", "Failed to start camera: ${e.message}", null)
                 }
@@ -191,6 +209,21 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
 
     override fun enableAnalysis() {
         isAnalysisEnabled = true
+        // If camera is already running, attach the analyzer now.
+        // Otherwise, startCamera() will pick up the flag.
+        if (::imageAnalysis.isInitialized) {
+            attachAnalyzer()
+        }
+    }
+
+    override fun disableAnalysis() {
+        isAnalysisEnabled = false
+        if (::imageAnalysis.isInitialized) {
+            imageAnalysis.clearAnalyzer()
+        }
+    }
+
+    private fun attachAnalyzer() {
         imageAnalysis.setAnalyzer(executor) { imageProxy ->
             if (!isAnalysisEnabled) {
                 imageProxy.close()
@@ -206,21 +239,22 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
             lastFrameTime = currentTime
             // ---------------------------
 
+            val helper = poseLandmarkerHelper
+            if (helper == null) {
+                imageProxy.close()
+                return@setAnalyzer
+            }
+
             try {
-                poseLandmarkerHelper.detectLiveStream(
+                helper.detectLiveStream(
                     imageProxy,
-                    isFrontCamera = false
+                    isFrontCamera = (currentLensFacing == CameraSelector.LENS_FACING_FRONT)
                 )
             } catch (e: Exception) {
-                if (isLoggingEnabled) Log.e("CameraManager", "Error during analysis", e)
+                Log.e("CameraManager", "Error during analysis", e)
                 imageProxy.close()
             }
         }
-    }
-
-    override fun disableAnalysis() {
-        isAnalysisEnabled = false
-        imageAnalysis.clearAnalyzer()
     }
 
     // -----------------------------
@@ -239,7 +273,7 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
 
     override fun dispose() {
         disableAnalysis()
-        poseLandmarkerHelper.clearPoseLandmarker()
+        poseLandmarkerHelper?.clearPoseLandmarker()
         executor.shutdown()
         try {
             ProcessCameraProvider.getInstance(activity).get().unbindAll()
@@ -249,24 +283,33 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
     }
 
     override fun onResults(resultBundle: PoseLandmarkerHelper.ResultBundle) {
-        val poseLandmarkerResult = resultBundle.results.firstOrNull()
-        if (poseLandmarkerResult != null) {
-            val landmarks = poseLandmarkerResult.landmarks().flatMap { landmarkList ->
+        try {
+            val poseLandmarkerResult = resultBundle.results.firstOrNull()
+            if (poseLandmarkerResult != null) {
+                val landmarks = poseLandmarkerResult.landmarks().flatMap { landmarkList ->
                 landmarkList.map { landmark ->
+                    val vis = try { landmark.visibility().orElse(1.0f) } catch (_: Exception) { 1.0f }
+                    val pres = try { landmark.presence().orElse(1.0f) } catch (_: Exception) { 1.0f }
                     Landmark(
                         x = landmark.x(),
                         y = landmark.y(),
-                        z = landmark.z()
+                        z = landmark.z(),
+                        visibility = vis,
+                        presence = pres
                     )
                 }
             }
 
             val worldLandmarks = poseLandmarkerResult.worldLandmarks().flatMap { landmarkList ->
                 landmarkList.map { landmark ->
+                    val vis = try { landmark.visibility().orElse(1.0f) } catch (_: Exception) { 1.0f }
+                    val pres = try { landmark.presence().orElse(1.0f) } catch (_: Exception) { 1.0f }
                     WorldLandmark(
                         x = landmark.x(),
                         y = landmark.y(),
-                        z = landmark.z()
+                        z = landmark.z(),
+                        visibility = vis,
+                        presence = pres
                     )
                 }
             }
@@ -283,9 +326,13 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
                 eventSink.get()?.success(json)
             }
         }
+        } catch (e: Exception) {
+            Log.e("CameraManager", "onResults crashed", e)
+        }
     }
 
     override fun onError(error: String, errorCode: Int) {
+        Log.e("CameraManager", "onError: $error (code=$errorCode)")
         activity.runOnUiThread {
             eventSink.get()?.error("POSE_ERROR", error, mapOf("code" to errorCode))
         }

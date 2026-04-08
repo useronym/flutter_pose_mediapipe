@@ -171,6 +171,27 @@ class PoseLandmarker {
     await _channel.invokeMethod('resumeAnalysis');
   }
 
+  /// Request camera permission at runtime. Returns true if granted.
+  static Future<bool> requestCameraPermission() async {
+    final granted =
+        await _channel.invokeMethod<bool>('requestCameraPermission');
+    return granted ?? false;
+  }
+
+  /// Check if camera permission is already granted.
+  static Future<bool> checkCameraPermission() async {
+    final granted =
+        await _channel.invokeMethod<bool>('checkCameraPermission');
+    return granted ?? false;
+  }
+
+  /// Whether the camera preview is currently mirrored (true for real front cameras).
+  /// Use this to decide if skeleton overlay needs x-axis flipping.
+  static Future<bool> isPreviewMirrored() async {
+    final mirrored = await _channel.invokeMethod<bool>('isPreviewMirrored');
+    return mirrored ?? false;
+  }
+
   /// Provides a broadcast stream of PoseLandMarker results
   static Stream<PoseLandMarker> get poseLandmarkStream {
     _poseStream ??= _eventChannel.receiveBroadcastStream().map((event) {
