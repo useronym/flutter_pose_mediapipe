@@ -115,6 +115,13 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
         case "isPreviewMirrored":
             result(cameraManager?.previewIsMirrored ?? false)
 
+        case "isEmulator":
+            #if targetEnvironment(simulator)
+            result(true)
+            #else
+            result(false)
+            #endif
+
         default:
             result(FlutterMethodNotImplemented)
         }

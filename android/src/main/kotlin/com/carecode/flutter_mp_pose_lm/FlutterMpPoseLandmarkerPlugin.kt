@@ -137,6 +137,10 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
                     result.success(null)
                 }
 
+                "isEmulator" -> {
+                    result.success(EmulatorDetector.isEmulator())
+                }
+
                 else -> result.notImplemented()
             }
         }

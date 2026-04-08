@@ -192,6 +192,12 @@ class PoseLandmarker {
     return mirrored ?? false;
   }
 
+  /// Whether the app is running on an emulator/simulator.
+  static Future<bool> isEmulator() async {
+    final emu = await _channel.invokeMethod<bool>('isEmulator');
+    return emu ?? false;
+  }
+
   /// Provides a broadcast stream of PoseLandMarker results
   static Stream<PoseLandMarker> get poseLandmarkStream {
     _poseStream ??= _eventChannel.receiveBroadcastStream().map((event) {
