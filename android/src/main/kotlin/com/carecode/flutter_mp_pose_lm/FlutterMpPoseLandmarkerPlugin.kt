@@ -2,22 +2,27 @@ package com.carecode.flutter_mp_pose_lm
 
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
 import android.view.View
 import android.widget.FrameLayout
 import androidx.annotation.NonNull
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.PluginRegistry
 import io.flutter.plugin.common.StandardMessageCodec
 import io.flutter.plugin.platform.PlatformView
 import io.flutter.plugin.platform.PlatformViewFactory
 import io.flutter.plugin.platform.PlatformViewRegistry
-import io.flutter.plugin.common.MethodChannel
 import androidx.camera.core.CameraSelector
 
-class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler, ActivityAware {
+class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler, ActivityAware,
+    PluginRegistry.RequestPermissionsResultListener {
 
     private lateinit var eventChannel: EventChannel
     private lateinit var methodChannel: MethodChannel
@@ -27,6 +32,8 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
     private var lensFacing: Int = CameraSelector.LENS_FACING_FRONT
 
     private var isLoggingEnabled: Boolean = false
+    private var pendingPermissionResult: MethodChannel.Result? = null
+    private val CAMERA_PERMISSION_REQUEST_CODE = 9876
 
     override fun onAttachedToEngine(@NonNull flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
         Log.d("PoseLandmarkerPlugin", "onAttachedToEngine called")
@@ -78,19 +85,40 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
                 }
 
                 "checkCameraPermission" -> {
-                    val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                    val hasPermission = ContextCompat.checkSelfPermission(
                         activity!!,
                         android.Manifest.permission.CAMERA
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    ) == PackageManager.PERMISSION_GRANTED
                     result.success(hasPermission)
                 }
 
+                "requestCameraPermission" -> {
+                    val hasPermission = ContextCompat.checkSelfPermission(
+                        activity!!,
+                        android.Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (hasPermission) {
+                        result.success(true)
+                    } else {
+                        pendingPermissionResult = result
+                        ActivityCompat.requestPermissions(
+                            activity!!,
+                            arrayOf(android.Manifest.permission.CAMERA),
+                            CAMERA_PERMISSION_REQUEST_CODE
+                        )
+                    }
+                }
+
                 "getCurrentCamera" -> {
-                    // On emulator, always report "front" as a sensible default
                     val currentLens = (poseManager as? CameraManager)?.getCurrentCameraLens()
                         ?: CameraSelector.LENS_FACING_FRONT
                     val cameraString = if (currentLens == CameraSelector.LENS_FACING_FRONT) "front" else "back"
                     result.success(cameraString)
+                }
+
+                "isPreviewMirrored" -> {
+                    val mirrored = (poseManager as? CameraManager)?.isPreviewMirrored() ?: false
+                    result.success(mirrored)
                 }
 
                 "setLoggingEnabled" -> {
@@ -109,23 +137,18 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
                     result.success(null)
                 }
 
+                "isEmulator" -> {
+                    result.success(EmulatorDetector.isEmulator())
+                }
+
                 else -> result.notImplemented()
             }
         }
 
         platformViewRegistry = flutterPluginBinding.platformViewRegistry
-    }
 
-    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
-        activity = binding.activity
-
-        poseManager = if (EmulatorDetector.isEmulator()) {
-            Log.d("PoseLandmarkerPlugin", "Emulator detected — using MockPoseManager")
-            MockPoseManager()
-        } else {
-            CameraManager(activity!!)
-        }
-
+        // Register platform view factory here (engine-scoped) — the factory
+        // lazily references poseManager which is set when the activity attaches.
         platformViewRegistry?.registerViewFactory("camera_preview_view",
             object : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
                 override fun create(context: Context, id: Int, args: Any?): PlatformView {
@@ -146,12 +169,44 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
         )
     }
 
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+        binding.addRequestPermissionsResultListener(this)
+
+        try {
+            // Always use CameraManager — emulator webcam passthrough works with CameraX
+            poseManager = CameraManager(activity!!)
+            Log.d("PoseLandmarkerPlugin", "CameraManager created (emulator=${EmulatorDetector.isEmulator()})")
+        } catch (e: Exception) {
+            Log.e("PoseLandmarkerPlugin", "Failed to create CameraManager", e)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ): Boolean {
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            val granted = grantResults.isNotEmpty() &&
+                    grantResults[0] == PackageManager.PERMISSION_GRANTED
+            pendingPermissionResult?.success(granted)
+            pendingPermissionResult = null
+            return true
+        }
+        return false
+    }
+
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        Log.d("PoseLandmarkerPlugin", "onListen called, poseManager=${poseManager?.javaClass?.simpleName}")
         poseManager?.apply {
-            val cameraManager = poseManager as? CameraManager
             setEventSink(events)
-            startCameraIfAvailable() // only now does it touch the hardware
+            startCameraIfAvailable()
             enableAnalysis()
+        }
+        if (poseManager == null) {
+            Log.e("PoseLandmarkerPlugin", "onListen: poseManager is NULL — camera will not start")
+            events?.error("NO_MANAGER", "PoseManager not initialized", null)
         }
     }
 

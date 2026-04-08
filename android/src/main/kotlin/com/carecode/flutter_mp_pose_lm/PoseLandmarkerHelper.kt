@@ -71,6 +71,17 @@ class PoseLandmarkerHelper(
         } finally {
             poseLandmarker = null
         }
+
+        // Clean up bitmap and RenderScript resources
+        try {
+            yuvToRgbConverter.destroy()
+        } catch (_: Throwable) {}
+        try {
+            bitmapBuffer?.recycle()
+            bitmapBuffer = null
+            rotatedBitmap?.recycle()
+            rotatedBitmap = null
+        } catch (_: Throwable) {}
     }
 
     // Return running status of PoseLandmarkerHelper
@@ -153,15 +164,40 @@ class PoseLandmarkerHelper(
                     .message
             )
         } catch (e: RuntimeException) {
-            // This occurs if the model being used does not support GPU
-            poseLandmarkerHelperListener?.onError(
-                "Pose Landmarker failed to initialize. See error logs for " +
-                        "details", GPU_ERROR
-            )
-            Log.e(
-                TAG,
-                "Image classifier failed to load model with error: " + e.message
-            )
+            // GPU delegate failed — auto-fallback to CPU
+            if (currentDelegate == DELEGATE_GPU) {
+                Log.w(TAG, "GPU delegate failed, falling back to CPU: ${e.message}")
+                currentDelegate = DELEGATE_CPU
+                try {
+                    val cpuBaseOptions = BaseOptions.builder()
+                        .setDelegate(Delegate.CPU)
+                        .setModelAssetPath(modelName)
+                        .build()
+                    val cpuOptions = PoseLandmarker.PoseLandmarkerOptions.builder()
+                        .setBaseOptions(cpuBaseOptions)
+                        .setMinPoseDetectionConfidence(minPoseDetectionConfidence)
+                        .setMinTrackingConfidence(minPoseTrackingConfidence)
+                        .setMinPosePresenceConfidence(minPosePresenceConfidence)
+                        .setRunningMode(runningMode)
+                    if (runningMode == RunningMode.LIVE_STREAM) {
+                        cpuOptions
+                            .setResultListener(this::returnLivestreamResult)
+                            .setErrorListener(this::returnLivestreamError)
+                    }
+                    poseLandmarker = PoseLandmarker.createFromOptions(context, cpuOptions.build())
+                    Log.i(TAG, "Successfully fell back to CPU delegate")
+                } catch (cpuError: Exception) {
+                    poseLandmarkerHelperListener?.onError(
+                        "Pose Landmarker failed to initialize with both GPU and CPU."
+                    )
+                    Log.e(TAG, "CPU fallback also failed: ${cpuError.message}")
+                }
+            } else {
+                poseLandmarkerHelperListener?.onError(
+                    "Pose Landmarker failed to initialize. See error logs for details", GPU_ERROR
+                )
+                Log.e(TAG, "Model load failed: ${e.message}")
+            }
         }
     }
 
@@ -215,6 +251,7 @@ class PoseLandmarkerHelper(
             val image = imageProxy.image
             if (image == null) {
                 // no usable image, just drop frame
+                imageProxy.close()
                 return
             }
 
@@ -228,13 +265,11 @@ class PoseLandmarkerHelper(
             // We have all info needed now; safe to close
             imageProxy.close()
 
-            // 4) Build transform matrix
+            // 4) Build transform matrix — rotate only, no mirroring.
+            // MediaPipe works fine with unmirrored frames; mirroring is
+            // handled on the Dart display side to match PreviewView.
             val matrix = Matrix().apply {
                 postRotate(rotationDegrees)
-                if (isFrontCamera) {
-                    // Mirror around center
-                    postScale(-1f, 1f, width / 2f, height / 2f)
-                }
             }
 
             // 5) Prepare rotated bitmap
@@ -255,11 +290,9 @@ class PoseLandmarkerHelper(
 
             detectAsync(mpImage, frameTime)
         } catch (t: Throwable) {
-            // ALWAYS make sure proxy is closed if something fails before we reached imageProxy.close()
+            // ALWAYS close proxy on error to unblock the ImageAnalysis pipeline
             try {
-                if (isClosed.get()) {
-                    imageProxy.close()
-                }
+                imageProxy.close()
             } catch (_: Throwable) { /* ignore secondary errors */ }
 
             Log.e("PoseLandmarkerHelper", "Error in detectLiveStream", t)
@@ -450,7 +483,7 @@ class PoseLandmarkerHelper(
         val inferenceTime: Long,
         val inputImageHeight: Int,
         val inputImageWidth: Int,
-        
+
     )
 
     interface LandmarkerListener {

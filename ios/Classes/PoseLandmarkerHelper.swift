@@ -47,7 +47,8 @@ class PoseLandmarkerHelper {
         // Find the bundle containing our model assets
         self.context = PoseLandmarkerHelper.modelBundle()
 
-        setupPoseLandmarker()
+        // Deferred setup — don't init the model here.
+        // Call setupPoseLandmarker() explicitly (e.g. from setConfig).
     }
 
     // MARK: - Setup
@@ -90,7 +91,28 @@ class PoseLandmarkerHelper {
 
             poseLandmarker = try PoseLandmarker(options: options)
         } catch {
-            delegate?.poseLandmarkerHelper(self, didFailWithError: "Failed to initialize PoseLandmarker: \(error.localizedDescription)")
+            // GPU delegate failed — auto-fallback to CPU (matching Android behavior)
+            if currentDelegate == PoseLandmarkerHelper.delegateGPU {
+                print("[PoseLandmarkerHelper] GPU delegate failed, falling back to CPU: \(error.localizedDescription)")
+                currentDelegate = PoseLandmarkerHelper.delegateCPU
+                do {
+                    let cpuBaseOptions = BaseOptions(modelAssetPath: modelPath)
+                    cpuBaseOptions.delegate = .CPU
+                    let cpuOptions = PoseLandmarkerOptions()
+                    cpuOptions.baseOptions = cpuBaseOptions
+                    cpuOptions.runningMode = .liveStream
+                    cpuOptions.minPoseDetectionConfidence = minPoseDetectionConfidence
+                    cpuOptions.minTrackingConfidence = minPoseTrackingConfidence
+                    cpuOptions.minPosePresenceConfidence = minPosePresenceConfidence
+                    cpuOptions.poseLandmarkerLiveStreamDelegate = self
+                    poseLandmarker = try PoseLandmarker(options: cpuOptions)
+                    print("[PoseLandmarkerHelper] Successfully fell back to CPU delegate")
+                } catch {
+                    delegate?.poseLandmarkerHelper(self, didFailWithError: "Failed to initialize with both GPU and CPU: \(error.localizedDescription)")
+                }
+            } else {
+                delegate?.poseLandmarkerHelper(self, didFailWithError: "Failed to initialize PoseLandmarker: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -168,12 +190,14 @@ extension PoseLandmarkerHelper: PoseLandmarkerLiveStreamDelegate {
         var landmarks: [[String: Any]] = []
         for poseLandmarks in result.landmarks {
             for landmark in poseLandmarks {
+                let vis = landmark.visibility?.floatValue ?? 1.0
+                let pres = landmark.presence?.floatValue ?? 1.0
                 landmarks.append([
                     "x": landmark.x,
                     "y": landmark.y,
                     "z": landmark.z,
-                    "visibility": 0.0,
-                    "presence": 0.0
+                    "visibility": vis,
+                    "presence": pres
                 ])
             }
         }
@@ -182,12 +206,14 @@ extension PoseLandmarkerHelper: PoseLandmarkerLiveStreamDelegate {
         var worldLandmarks: [[String: Any]] = []
         for poseWorldLandmarks in result.worldLandmarks {
             for landmark in poseWorldLandmarks {
+                let vis = landmark.visibility?.floatValue ?? 1.0
+                let pres = landmark.presence?.floatValue ?? 1.0
                 worldLandmarks.append([
                     "x": landmark.x,
                     "y": landmark.y,
                     "z": landmark.z,
-                    "visibility": 0.0,
-                    "presence": 0.0
+                    "visibility": vis,
+                    "presence": pres
                 ])
             }
         }
