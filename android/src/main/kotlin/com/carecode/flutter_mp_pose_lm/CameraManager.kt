@@ -28,7 +28,16 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
         val x: Float,
         val y: Float,
         val z: Float,
-        val visibility: Double = 1.0
+        val visibility: Float = 0f,
+        val presence: Float = 0f
+    )
+
+    data class WorldLandmark(
+        val x: Float,
+        val y: Float,
+        val z: Float,
+        val visibility: Float = 0f,
+        val presence: Float = 0f
     )
 
     val previewView = PreviewView(activity).apply {
@@ -252,10 +261,21 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
                 }
             }
 
+            val worldLandmarks = poseLandmarkerResult.worldLandmarks().flatMap { landmarkList ->
+                landmarkList.map { landmark ->
+                    WorldLandmark(
+                        x = landmark.x(),
+                        y = landmark.y(),
+                        z = landmark.z()
+                    )
+                }
+            }
+
             val resultMap = mapOf(
                 "timestampMs" to SystemClock.uptimeMillis(),
                 "landmarks" to landmarks,
-                "fps" to fps  // <-- Added FPS here
+                "worldLandmarks" to worldLandmarks,
+                "fps" to fps
             )
 
             val json = gson.toJson(resultMap)

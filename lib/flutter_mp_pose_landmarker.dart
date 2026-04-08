@@ -3,18 +3,20 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 
-/// Model for a single landmark point
+/// Model for a single normalized landmark point (image coordinates)
 class PoseLandmarkPoint {
   final double x;
   final double y;
   final double z;
   final double visibility;
+  final double presence;
 
   PoseLandmarkPoint({
     required this.x,
     required this.y,
     required this.z,
     required this.visibility,
+    this.presence = 0.0,
   });
 
   Map<String, dynamic> toJson() {
@@ -23,6 +25,7 @@ class PoseLandmarkPoint {
       'y': y,
       'z': z,
       'visibility': visibility,
+      'presence': presence,
     };
   }
 
@@ -31,7 +34,45 @@ class PoseLandmarkPoint {
       x: json['x'].toDouble(),
       y: json['y'].toDouble(),
       z: json['z'].toDouble(),
-      visibility: json['visibility'].toDouble(),
+      visibility: (json['visibility'] ?? 0.0).toDouble(),
+      presence: (json['presence'] ?? 0.0).toDouble(),
+    );
+  }
+}
+
+/// Model for a single world landmark point (real-world 3D coordinates in meters)
+class WorldLandmarkPoint {
+  final double x;
+  final double y;
+  final double z;
+  final double visibility;
+  final double presence;
+
+  WorldLandmarkPoint({
+    required this.x,
+    required this.y,
+    required this.z,
+    required this.visibility,
+    this.presence = 0.0,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'x': x,
+      'y': y,
+      'z': z,
+      'visibility': visibility,
+      'presence': presence,
+    };
+  }
+
+  factory WorldLandmarkPoint.fromJson(Map<String, dynamic> json) {
+    return WorldLandmarkPoint(
+      x: json['x'].toDouble(),
+      y: json['y'].toDouble(),
+      z: json['z'].toDouble(),
+      visibility: (json['visibility'] ?? 0.0).toDouble(),
+      presence: (json['presence'] ?? 0.0).toDouble(),
     );
   }
 }
@@ -40,23 +81,40 @@ class PoseLandmarkPoint {
 class PoseLandMarker {
   final int timestampMs;
   final List<PoseLandmarkPoint> landmarks;
-  final double? fps; // <- إضافة fps
+  final List<WorldLandmarkPoint> worldLandmarks;
+  final double? fps;
 
   PoseLandMarker({
     required this.timestampMs,
     required this.landmarks,
+    this.worldLandmarks = const [],
     this.fps,
   });
 
   factory PoseLandMarker.fromJson(Map<String, dynamic> json) {
     var landmarkList = json['landmarks'] as List;
     List<PoseLandmarkPoint> landmarks = landmarkList
-        .map((pointJson) => PoseLandmarkPoint.fromJson(pointJson))
+        .map((pointJson) => PoseLandmarkPoint.fromJson(
+            pointJson is Map<String, dynamic>
+                ? pointJson
+                : Map<String, dynamic>.from(pointJson as Map)))
         .toList();
+
+    List<WorldLandmarkPoint> worldLandmarks = [];
+    if (json['worldLandmarks'] != null) {
+      var worldList = json['worldLandmarks'] as List;
+      worldLandmarks = worldList
+          .map((pointJson) => WorldLandmarkPoint.fromJson(
+              pointJson is Map<String, dynamic>
+                  ? pointJson
+                  : Map<String, dynamic>.from(pointJson as Map)))
+          .toList();
+    }
 
     return PoseLandMarker(
       timestampMs: json['timestampMs'],
       landmarks: landmarks,
+      worldLandmarks: worldLandmarks,
       fps: json['fps']?.toDouble(),
     );
   }
