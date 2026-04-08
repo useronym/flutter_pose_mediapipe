@@ -29,6 +29,8 @@ flutter:
       android:
         package: com.carecode.flutter_mp_pose_lm
         pluginClass: FlutterMpPoseLandmarkerPlugin
+      ios:
+        pluginClass: FlutterMpPoseLandmarkerPlugin
 
 topics:
   - pose
