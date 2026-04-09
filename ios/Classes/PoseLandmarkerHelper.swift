@@ -3,7 +3,7 @@ import MediaPipeTasksVision
 
 /// Wraps MediaPipe Pose Landmarker configuration and async detection.
 /// Mirrors the Android `PoseLandmarkerHelper.kt`.
-class PoseLandmarkerHelper {
+class PoseLandmarkerHelper: NSObject {
     // MARK: - Constants (matching Android companion object)
     static let delegateCPU = 0
     static let delegateGPU = 1
@@ -72,7 +72,8 @@ class PoseLandmarkerHelper {
         }
 
         do {
-            let baseOptions = BaseOptions(modelAssetPath: modelPath)
+            let baseOptions = BaseOptions()
+            baseOptions.modelAssetPath = modelPath
 
             switch currentDelegate {
             case PoseLandmarkerHelper.delegateGPU:
@@ -96,7 +97,8 @@ class PoseLandmarkerHelper {
                 print("[PoseLandmarkerHelper] GPU delegate failed, falling back to CPU: \(error.localizedDescription)")
                 currentDelegate = PoseLandmarkerHelper.delegateCPU
                 do {
-                    let cpuBaseOptions = BaseOptions(modelAssetPath: modelPath)
+                    let cpuBaseOptions = BaseOptions()
+                    cpuBaseOptions.modelAssetPath = modelPath
                     cpuBaseOptions.delegate = .CPU
                     let cpuOptions = PoseLandmarkerOptions()
                     cpuOptions.baseOptions = cpuBaseOptions
