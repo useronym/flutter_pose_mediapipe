@@ -1,7 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
+
+import 'src/stub_pose_landmarker.dart';
+
+bool get _useStub => !(Platform.isAndroid || Platform.isIOS);
 
 /// Model for a single normalized landmark point (image coordinates)
 class PoseLandmarkPoint {
@@ -136,6 +141,7 @@ class PoseLandmarker {
     double minPoseTrackingConfidence = 0.5,
     double minPosePresenceConfidence = 0.5,
   }) async {
+    if (_useStub) return;
     await _channel.invokeMethod("setConfig", {
       "delegate": delegate,
       "model": model,
@@ -147,32 +153,38 @@ class PoseLandmarker {
 
   /// Switch between front/back camera
   static Future<void> switchCamera() async {
+    if (_useStub) return;
     await _channel.invokeMethod('switchCamera');
   }
 
   /// Get current camera ("front" or "back")
   static Future<String> getCurrentCamera() async {
+    if (_useStub) return StubPoseLandmarker.getCurrentCamera();
     final camera = await _channel.invokeMethod<String>('getCurrentCamera');
     return camera ?? "back"; // fallback
   }
 
   /// Enable or disable logging on native side
   static Future<void> setLoggingEnabled(bool enabled) async {
+    if (_useStub) return;
     await _channel.invokeMethod('setLoggingEnabled', {"enabled": enabled});
   }
 
   /// Pause pose detection without stopping the camera
   static Future<void> pauseDetection() async {
+    if (_useStub) return StubPoseLandmarker.pauseDetection();
     await _channel.invokeMethod('pauseAnalysis');
   }
 
   /// Resume pose detection while keeping the camera live
   static Future<void> resumeDetection() async {
+    if (_useStub) return StubPoseLandmarker.resumeDetection();
     await _channel.invokeMethod('resumeAnalysis');
   }
 
   /// Request camera permission at runtime. Returns true if granted.
   static Future<bool> requestCameraPermission() async {
+    if (_useStub) return true;
     final granted =
         await _channel.invokeMethod<bool>('requestCameraPermission');
     return granted ?? false;
@@ -180,6 +192,7 @@ class PoseLandmarker {
 
   /// Check if camera permission is already granted.
   static Future<bool> checkCameraPermission() async {
+    if (_useStub) return true;
     final granted =
         await _channel.invokeMethod<bool>('checkCameraPermission');
     return granted ?? false;
@@ -188,12 +201,14 @@ class PoseLandmarker {
   /// Whether the camera preview is currently mirrored (true for real front cameras).
   /// Use this to decide if skeleton overlay needs x-axis flipping.
   static Future<bool> isPreviewMirrored() async {
+    if (_useStub) return false;
     final mirrored = await _channel.invokeMethod<bool>('isPreviewMirrored');
     return mirrored ?? false;
   }
 
   /// Whether the app is running on an emulator/simulator.
   static Future<bool> isEmulator() async {
+    if (_useStub) return false;
     final emu = await _channel.invokeMethod<bool>('isEmulator');
     return emu ?? false;
   }
@@ -201,6 +216,7 @@ class PoseLandmarker {
   /// Query supported FPS ranges from the camera hardware.
   /// Returns a list of {min, max} maps sorted by max FPS.
   static Future<List<Map<String, int>>> getSupportedFpsRanges() async {
+    if (_useStub) return StubPoseLandmarker.getSupportedFpsRanges();
     final result = await _channel.invokeMethod<List>('getSupportedFpsRanges');
     if (result == null) return [];
     return result.map((item) {
@@ -214,16 +230,19 @@ class PoseLandmarker {
 
   /// Set target camera FPS range. Restarts camera pipeline to apply.
   static Future<void> setTargetFps({required int min, required int max}) async {
+    if (_useStub) return;
     await _channel.invokeMethod('setTargetFps', {'min': min, 'max': max});
   }
 
   /// Clear target FPS and revert to device default. Restarts camera pipeline.
   static Future<void> clearTargetFps() async {
+    if (_useStub) return;
     await _channel.invokeMethod('clearTargetFps');
   }
 
   /// Provides a broadcast stream of PoseLandMarker results
   static Stream<PoseLandMarker> get poseLandmarkStream {
+    if (_useStub) return StubPoseLandmarker.poseLandmarkStream;
     _poseStream ??= _eventChannel.receiveBroadcastStream().map((event) {
       try {
         final Map<String, dynamic> jsonMap = jsonDecode(event);
