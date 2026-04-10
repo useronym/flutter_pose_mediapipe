@@ -123,6 +123,20 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
             result(false)
             #endif
 
+        case "getSupportedFpsRanges":
+            let ranges = cameraManager?.getSupportedFpsRanges() ?? []
+            result(ranges)
+
+        case "setTargetFps":
+            let min = args?["min"] as? Int ?? 0
+            let max = args?["max"] as? Int ?? 0
+            cameraManager?.setTargetFps(min: min, max: max)
+            result(nil)
+
+        case "clearTargetFps":
+            cameraManager?.clearTargetFps()
+            result(nil)
+
         default:
             result(FlutterMethodNotImplemented)
         }

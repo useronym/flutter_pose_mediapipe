@@ -198,6 +198,30 @@ class PoseLandmarker {
     return emu ?? false;
   }
 
+  /// Query supported FPS ranges from the camera hardware.
+  /// Returns a list of {min, max} maps sorted by max FPS.
+  static Future<List<Map<String, int>>> getSupportedFpsRanges() async {
+    final result = await _channel.invokeMethod<List>('getSupportedFpsRanges');
+    if (result == null) return [];
+    return result.map((item) {
+      final map = Map<String, dynamic>.from(item as Map);
+      return {
+        'min': (map['min'] as num).toInt(),
+        'max': (map['max'] as num).toInt(),
+      };
+    }).toList();
+  }
+
+  /// Set target camera FPS range. Restarts camera pipeline to apply.
+  static Future<void> setTargetFps({required int min, required int max}) async {
+    await _channel.invokeMethod('setTargetFps', {'min': min, 'max': max});
+  }
+
+  /// Clear target FPS and revert to device default. Restarts camera pipeline.
+  static Future<void> clearTargetFps() async {
+    await _channel.invokeMethod('clearTargetFps');
+  }
+
   /// Provides a broadcast stream of PoseLandMarker results
   static Stream<PoseLandMarker> get poseLandmarkStream {
     _poseStream ??= _eventChannel.receiveBroadcastStream().map((event) {

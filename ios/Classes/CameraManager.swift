@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import UIKit
 
 /// Manages AVCaptureSession, camera preview, and frame delivery for pose detection.
@@ -31,6 +32,10 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     // FPS tracking
     private var lastFrameTime: CFTimeInterval = 0
     private var fps: Double = 0
+
+    // Target FPS — nil means use device defaults
+    private var targetMinFps: Int?
+    private var targetMaxFps: Int?
 
     // Callback for results — set by the plugin
     var onResults: ((_ json: String) -> Void)?
@@ -138,6 +143,11 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
         // Track whether the preview layer will mirror (front camera only)
         previewIsMirrored = (currentCameraPosition == .front)
 
+        // Apply target FPS if set
+        if let minFps = targetMinFps, let maxFps = targetMaxFps {
+            applyTargetFps(to: camera, minFps: minFps, maxFps: maxFps)
+        }
+
         captureSession.commitConfiguration()
 
         if !captureSession.isRunning {
@@ -150,6 +160,62 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     func switchCamera() {
         currentCameraPosition = (currentCameraPosition == .front) ? .back : .front
         startCamera()
+    }
+
+    // MARK: - FPS Control
+
+    func getSupportedFpsRanges() -> [[String: Int]] {
+        guard let camera = AVCaptureDevice.default(
+            .builtInWideAngleCamera,
+            for: .video,
+            position: currentCameraPosition
+        ) else { return [] }
+
+        var uniqueRanges = Set<String>()
+        var result: [[String: Int]] = []
+
+        for format in camera.formats {
+            for range in format.videoSupportedFrameRateRanges {
+                let min = Int(range.minFrameRate)
+                let max = Int(range.maxFrameRate)
+                let key = "\(min)-\(max)"
+                if !uniqueRanges.contains(key) {
+                    uniqueRanges.insert(key)
+                    result.append(["min": min, "max": max])
+                }
+            }
+        }
+
+        return result.sorted { a, b in
+            if a["max"]! != b["max"]! { return a["max"]! < b["max"]! }
+            return a["min"]! < b["min"]!
+        }
+    }
+
+    func setTargetFps(min: Int, max: Int) {
+        targetMinFps = min
+        targetMaxFps = max
+        startCamera()
+    }
+
+    func clearTargetFps() {
+        targetMinFps = nil
+        targetMaxFps = nil
+        startCamera()
+    }
+
+    private func applyTargetFps(to device: AVCaptureDevice, minFps: Int, maxFps: Int) {
+        do {
+            try device.lockForConfiguration()
+            device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: CMTimeScale(maxFps))
+            device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: CMTimeScale(minFps))
+            device.unlockForConfiguration()
+            if isLoggingEnabled {
+                print("[CameraManager] Applied target FPS: \(minFps)-\(maxFps)")
+            }
+        } catch {
+            print("[CameraManager] Failed to set FPS: \(error)")
+        }
     }
 
     func getCurrentCameraPosition() -> AVCaptureDevice.Position {

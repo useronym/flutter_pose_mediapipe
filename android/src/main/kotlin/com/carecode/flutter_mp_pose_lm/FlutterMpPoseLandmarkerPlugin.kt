@@ -141,6 +141,23 @@ class FlutterMpPoseLandmarkerPlugin : FlutterPlugin, EventChannel.StreamHandler,
                     result.success(EmulatorDetector.isEmulator())
                 }
 
+                "getSupportedFpsRanges" -> {
+                    val ranges = (poseManager as? CameraManager)?.getSupportedFpsRanges() ?: emptyList()
+                    result.success(ranges)
+                }
+
+                "setTargetFps" -> {
+                    val min = call.argument<Int>("min") ?: 0
+                    val max = call.argument<Int>("max") ?: 0
+                    (poseManager as? CameraManager)?.setTargetFps(min, max)
+                    result.success(null)
+                }
+
+                "clearTargetFps" -> {
+                    (poseManager as? CameraManager)?.clearTargetFps()
+                    result.success(null)
+                }
+
                 else -> result.notImplemented()
             }
         }

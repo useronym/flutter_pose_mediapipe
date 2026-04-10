@@ -1,10 +1,15 @@
 package com.carecode.flutter_mp_pose_lm
 
 import android.app.Activity
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CaptureRequest
 import android.os.SystemClock
 import android.util.Log
+import android.util.Range
 import android.util.Size
 import android.widget.FrameLayout
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -67,6 +72,9 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
     private var lastFrameTime = SystemClock.elapsedRealtime()
     private var fps = 0.0
 
+    // Target FPS range — null means use device defaults
+    private var targetFpsRange: Range<Int>? = null
+
     // Lazily initialized — do NOT create in constructor (GPU delegate crashes on emulators)
     private var poseLandmarkerHelper: PoseLandmarkerHelper? = null
 
@@ -127,6 +135,37 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
         return previewIsMirrored
     }
 
+    @androidx.camera.camera2.interop.ExperimentalCamera2Interop
+    fun getSupportedFpsRanges(): List<Map<String, Int>> {
+        return try {
+            val cameraProvider = ProcessCameraProvider.getInstance(activity).get()
+            val cameraSelector = CameraSelector.Builder()
+                .requireLensFacing(currentLensFacing)
+                .build()
+            val cameraInfoList = cameraSelector.filter(cameraProvider.availableCameraInfos)
+            val cameraInfo = cameraInfoList.firstOrNull() ?: return emptyList()
+            val camera2Info = Camera2CameraInfo.from(cameraInfo)
+            val ranges = camera2Info.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+            ranges?.map { range ->
+                mapOf("min" to range.lower, "max" to range.upper)
+            }?.sortedWith(compareBy({ it["max"] }, { it["min"] })) ?: emptyList()
+        } catch (e: Exception) {
+            Log.e("CameraManager", "Failed to get supported FPS ranges", e)
+            emptyList()
+        }
+    }
+
+    fun setTargetFps(min: Int, max: Int) {
+        targetFpsRange = Range(min, max)
+        startCamera() // rebind with new FPS range
+    }
+
+    fun clearTargetFps() {
+        targetFpsRange = null
+        startCamera() // rebind with default FPS
+    }
+
+    @androidx.camera.camera2.interop.ExperimentalCamera2Interop
     fun startCamera() {
         Log.d("CameraManager", "startCamera() called, lensFacing=$currentLensFacing, analysisEnabled=$isAnalysisEnabled")
         val cameraProviderFuture = ProcessCameraProvider.getInstance(activity)
@@ -150,17 +189,27 @@ class CameraManager(private val activity: Activity) : PoseLandmarkerHelper.Landm
                     )
                     .build()
 
-                val preview = Preview.Builder()
+                val previewBuilder = Preview.Builder()
                     .setResolutionSelector(resolutionSelector)
-                    .build()
-                    .also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
 
-                imageAnalysis = ImageAnalysis.Builder()
+                val analysisBuilder = ImageAnalysis.Builder()
                     .setResolutionSelector(resolutionSelector)
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
+
+                // Apply target FPS range via Camera2Interop if set
+                targetFpsRange?.let { fpsRange ->
+                    Camera2Interop.Extender(previewBuilder)
+                        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+                    Camera2Interop.Extender(analysisBuilder)
+                        .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+                    Log.d("CameraManager", "Applied target FPS range: $fpsRange")
+                }
+
+                val preview = previewBuilder.build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+
+                imageAnalysis = analysisBuilder.build()
 
                 if (isAnalysisEnabled) {
                     attachAnalyzer()
