@@ -164,7 +164,6 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
     }
 
     public func onCancel(withArguments arguments: Any?) -> FlutterError? {
-        cameraManager?.disableAnalysis()
         cameraManager?.releaseCamera()
         eventSink = nil
         return nil

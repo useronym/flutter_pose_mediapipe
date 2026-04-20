@@ -223,40 +223,61 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     }
 
     func enableAnalysis() {
-        isAnalysisEnabled = true
-        videoOutput?.setSampleBufferDelegate(self, queue: videoDataOutputQueue)
+        videoDataOutputQueue.async { [weak self] in
+            guard let self else { return }
+            self.isAnalysisEnabled = true
+            self.videoOutput?.setSampleBufferDelegate(self, queue: self.videoDataOutputQueue)
+        }
     }
 
     func disableAnalysis() {
-        isAnalysisEnabled = false
-        videoOutput?.setSampleBufferDelegate(nil, queue: nil)
+        videoDataOutputQueue.async { [weak self] in
+            self?.disableAnalysisLocked()
+        }
     }
 
     func pauseAnalysis() {
-        isAnalysisEnabled = false
-        if isLoggingEnabled {
-            print("[CameraManager] Pose analysis paused")
+        videoDataOutputQueue.async { [weak self] in
+            guard let self else { return }
+            self.isAnalysisEnabled = false
+            if self.isLoggingEnabled {
+                print("[CameraManager] Pose analysis paused")
+            }
         }
     }
 
     func resumeAnalysis() {
-        isAnalysisEnabled = true
-        if isLoggingEnabled {
-            print("[CameraManager] Pose analysis resumed")
+        videoDataOutputQueue.async { [weak self] in
+            guard let self else { return }
+            self.isAnalysisEnabled = true
+            self.videoOutput?.setSampleBufferDelegate(self, queue: self.videoDataOutputQueue)
+            if self.isLoggingEnabled {
+                print("[CameraManager] Pose analysis resumed")
+            }
         }
     }
 
     func releaseCamera() {
-        disableAnalysis()
-        if captureSession.isRunning {
-            captureSession.stopRunning()
+        videoDataOutputQueue.async { [weak self] in
+            guard let self else { return }
+            self.disableAnalysisLocked()
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+            }
         }
     }
 
     func dispose() {
         releaseCamera()
-        poseLandmarkerHelper?.clearPoseLandmarker()
-        poseLandmarkerHelper = nil
+        videoDataOutputQueue.async { [weak self] in
+            self?.poseLandmarkerHelper?.clearPoseLandmarker()
+            self?.poseLandmarkerHelper = nil
+        }
+    }
+
+    private func disableAnalysisLocked() {
+        isAnalysisEnabled = false
+        videoOutput?.setSampleBufferDelegate(nil, queue: nil)
     }
 
     // MARK: - Preview Layer
