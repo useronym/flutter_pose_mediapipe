@@ -16,6 +16,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
         label: "com.carecode.flutter_mp_pose_lm.videoOutput",
         qos: .userInteractive
     )
+    private let queueKey = DispatchSpecificKey<Void>()
 
     private var currentCameraPosition: AVCaptureDevice.Position = .front
     private var videoOutput: AVCaptureVideoDataOutput?
@@ -45,6 +46,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
 
     override init() {
         super.init()
+        videoDataOutputQueue.setSpecific(key: queueKey, value: ())
     }
 
     // MARK: - Configuration
@@ -56,18 +58,20 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
         minPoseTrackingConfidence: Float,
         minPosePresenceConfidence: Float
     ) {
-        poseLandmarkerHelper?.clearPoseLandmarker()
+        runOnCaptureQueueSync {
+            poseLandmarkerHelper?.clearPoseLandmarker()
 
-        let helper = PoseLandmarkerHelper(
-            minPoseDetectionConfidence: minPoseDetectionConfidence,
-            minPoseTrackingConfidence: minPoseTrackingConfidence,
-            minPosePresenceConfidence: minPosePresenceConfidence,
-            currentModel: model,
-            currentDelegate: delegate
-        )
-        helper.delegate = self
-        helper.setupPoseLandmarker()
-        poseLandmarkerHelper = helper
+            let helper = PoseLandmarkerHelper(
+                minPoseDetectionConfidence: minPoseDetectionConfidence,
+                minPoseTrackingConfidence: minPoseTrackingConfidence,
+                minPosePresenceConfidence: minPosePresenceConfidence,
+                currentModel: model,
+                currentDelegate: delegate
+            )
+            helper.delegate = self
+            helper.setupPoseLandmarker()
+            poseLandmarkerHelper = helper
+        }
     }
 
     // MARK: - Camera Setup
@@ -195,13 +199,17 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     func setTargetFps(min: Int, max: Int) {
         targetMinFps = min
         targetMaxFps = max
-        startCamera()
+        if shouldRestartCameraForFpsChange() {
+            startCamera()
+        }
     }
 
     func clearTargetFps() {
         targetMinFps = nil
         targetMaxFps = nil
-        startCamera()
+        if shouldRestartCameraForFpsChange() {
+            startCamera()
+        }
     }
 
     private func applyTargetFps(to device: AVCaptureDevice, minFps: Int, maxFps: Int) {
@@ -258,26 +266,44 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     }
 
     func releaseCamera() {
-        videoDataOutputQueue.async { [weak self] in
-            guard let self else { return }
-            self.disableAnalysisLocked()
-            if self.captureSession.isRunning {
-                self.captureSession.stopRunning()
+        runOnCaptureQueueSync {
+            disableAnalysisLocked()
+            if captureSession.isRunning {
+                captureSession.stopRunning()
             }
+            lastFrameTime = 0
+            fps = 0
+            poseLandmarkerHelper?.clearPoseLandmarker()
+            poseLandmarkerHelper = nil
         }
     }
 
     func dispose() {
         releaseCamera()
-        videoDataOutputQueue.async { [weak self] in
-            self?.poseLandmarkerHelper?.clearPoseLandmarker()
-            self?.poseLandmarkerHelper = nil
-        }
     }
 
     private func disableAnalysisLocked() {
         isAnalysisEnabled = false
         videoOutput?.setSampleBufferDelegate(nil, queue: nil)
+    }
+
+    private func shouldRestartCameraForFpsChange() -> Bool {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            return captureSession.isRunning || !captureSession.inputs.isEmpty
+        }
+
+        return videoDataOutputQueue.sync {
+            captureSession.isRunning || !captureSession.inputs.isEmpty
+        }
+    }
+
+    private func runOnCaptureQueueSync(_ block: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            block()
+            return
+        }
+
+        videoDataOutputQueue.sync(execute: block)
     }
 
     // MARK: - Preview Layer
