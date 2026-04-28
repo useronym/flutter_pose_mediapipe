@@ -153,9 +153,7 @@ class PoseLandmarkerHelper: NSObject {
         do {
             let mpImage = try MPImage(uiImage: image)
             let result = try poseLandmarker.detect(videoFrame: mpImage, timestampInMilliseconds: timestampMs)
-            if let result {
                 publish(result: result, timestampMs: timestampMs)
-            }
         } catch {
             delegate?.poseLandmarkerHelper(self, didFailWithError: "Video detection failed: \(error.localizedDescription)")
         }
