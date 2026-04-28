@@ -45,6 +45,7 @@ class PoseLandmarkerHelper(
     // this listener is only used when running in RunningMode.LIVE_STREAM
     val poseLandmarkerHelperListener: LandmarkerListener? = null
 ) {
+    private val videoLoopGapMs = 1000L
 
     // For this example this needs to be a var so it can be reset on changes.
     // If the Pose Landmarker will not change, a lazy val would be preferable.
@@ -396,6 +397,123 @@ class PoseLandmarkerHelper(
             null
         } else {
             ResultBundle(resultList, inferenceTimePerFrameMs, height, width)
+        }
+    }
+
+    fun streamVideoFile(
+        videoUri: Uri,
+        inferenceIntervalMs: Long,
+        loop: Boolean,
+        startPositionMs: Long,
+        shouldContinue: () -> Boolean,
+        onFrame: (PoseLandmarkerResult, Long, Double) -> Unit
+    ) {
+        if (runningMode != RunningMode.VIDEO) {
+            throw IllegalArgumentException(
+                "Attempting to call streamVideoFile while not using RunningMode.VIDEO"
+            )
+        }
+
+        val safeIntervalMs = inferenceIntervalMs.coerceAtLeast(1L)
+        val retriever = MediaMetadataRetriever()
+        retriever.setDataSource(context, videoUri)
+
+        val videoLengthMs = retriever
+            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            ?.toLong()
+            ?: run {
+                retriever.release()
+                return
+            }
+
+        val firstFrame = retriever.getFrameAtTime(0)
+        if (firstFrame == null) {
+            retriever.release()
+            return
+        }
+        firstFrame.recycle()
+
+        val numberOfFrames = maxOf(0L, videoLengthMs / safeIntervalMs)
+        val emittedFps = 1000.0 / safeIntervalMs.toDouble()
+        val wallClockStartMs = SystemClock.elapsedRealtime()
+        val framesPerLoop = numberOfFrames + 1
+        var lastFrameOrdinal = -1L
+        val clampedStartPositionMs = startPositionMs.coerceAtLeast(0L)
+
+        while (shouldContinue()) {
+            val elapsedMs =
+                (SystemClock.elapsedRealtime() - wallClockStartMs + clampedStartPositionMs)
+                    .coerceAtLeast(0L)
+            val loopIndex = if (videoLengthMs > 0) elapsedMs / videoLengthMs else 0L
+
+            if (!loop && loopIndex > 0) {
+                break
+            }
+
+            val loopPositionMs = if (videoLengthMs > 0) elapsedMs % videoLengthMs else 0L
+            val frameIndex = minOf(numberOfFrames, loopPositionMs / safeIntervalMs)
+            val frameOrdinal = loopIndex * framesPerLoop + frameIndex
+
+            if (frameOrdinal == lastFrameOrdinal) {
+                val nextFrameTimeMs =
+                    wallClockStartMs + (loopIndex * videoLengthMs) + ((frameIndex + 1) * safeIntervalMs)
+                paceVideoFrame(nextFrameTimeMs, shouldContinue)
+                continue
+            }
+
+            lastFrameOrdinal = frameOrdinal
+            val sourceTimestampMs = minOf(frameIndex * safeIntervalMs, videoLengthMs)
+            val emittedTimestampMs =
+                loopIndex * (videoLengthMs + videoLoopGapMs) + sourceTimestampMs
+
+            val frame = retriever.getFrameAtTime(
+                sourceTimestampMs * 1000,
+                MediaMetadataRetriever.OPTION_CLOSEST
+            )
+
+            if (frame == null) {
+                poseLandmarkerHelperListener?.onError(
+                    "Frame at specified time could not be retrieved when detecting in video."
+                )
+                continue
+            }
+
+            val argb8888Frame =
+                if (frame.config == Bitmap.Config.ARGB_8888) frame
+                else frame.copy(Bitmap.Config.ARGB_8888, false)
+
+            val mpImage = BitmapImageBuilder(argb8888Frame).build()
+            val detectionResult = poseLandmarker?.detectForVideo(mpImage, emittedTimestampMs)
+
+            if (detectionResult != null) {
+                onFrame(detectionResult, emittedTimestampMs, emittedFps)
+            } else {
+                poseLandmarkerHelperListener?.onError(
+                    "Pose Landmarker failed to detect a pose in the selected video."
+                )
+            }
+
+            if (argb8888Frame !== frame) {
+                argb8888Frame.recycle()
+            }
+            frame.recycle()
+        }
+
+        retriever.release()
+    }
+
+    private fun paceVideoFrame(targetRealtimeMs: Long, shouldContinue: () -> Boolean) {
+        while (shouldContinue()) {
+            val remainingMs = targetRealtimeMs - SystemClock.elapsedRealtime()
+            if (remainingMs <= 0) {
+                return
+            }
+            try {
+                Thread.sleep(minOf(remainingMs, 20L))
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
         }
     }
 

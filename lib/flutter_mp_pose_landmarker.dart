@@ -133,6 +133,31 @@ class PoseLandmarker {
 
   static Stream<PoseLandMarker>? _poseStream;
 
+  static Future<void> configureSource({required String source}) async {
+    if (_useStub) return;
+    await _channel.invokeMethod('configureSource', {'source': source});
+  }
+
+  static Future<void> startVideoDetection({
+    required String path,
+    int intervalMs = 33,
+    bool loop = true,
+    int startPositionMs = 0,
+  }) async {
+    if (_useStub) return;
+    await _channel.invokeMethod('startVideoDetection', {
+      'path': path,
+      'intervalMs': intervalMs,
+      'loop': loop,
+      'startPositionMs': startPositionMs,
+    });
+  }
+
+  static Future<void> stopVideoDetection() async {
+    if (_useStub) return;
+    await _channel.invokeMethod('stopVideoDetection');
+  }
+
   /// Sets configuration including delegate, model, and confidence thresholds
   static Future<void> setConfig({
     required int delegate, // 0 = CPU, 1 = GPU
@@ -154,6 +179,7 @@ class PoseLandmarker {
   /// Switch between front/back camera
   static Future<void> switchCamera() async {
     if (_useStub) return;
+    await configureSource(source: 'camera');
     await _channel.invokeMethod('switchCamera');
   }
 
@@ -185,6 +211,7 @@ class PoseLandmarker {
   /// Request camera permission at runtime. Returns true if granted.
   static Future<bool> requestCameraPermission() async {
     if (_useStub) return true;
+    await configureSource(source: 'camera');
     final granted =
         await _channel.invokeMethod<bool>('requestCameraPermission');
     return granted ?? false;

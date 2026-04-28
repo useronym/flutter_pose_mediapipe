@@ -24,6 +24,7 @@ class PoseLandmarkerHelper: NSObject {
     var minPosePresenceConfidence: Float
     var currentModel: Int
     var currentDelegate: Int
+    var runningMode: RunningMode
 
     weak var delegate: PoseLandmarkerHelperDelegate?
 
@@ -35,6 +36,7 @@ class PoseLandmarkerHelper: NSObject {
         minPosePresenceConfidence: Float = defaultPosePresenceConfidence,
         currentModel: Int = modelLite,
         currentDelegate: Int = delegateGPU,
+        runningMode: RunningMode = .liveStream,
         delegate: PoseLandmarkerHelperDelegate? = nil
     ) {
         self.minPoseDetectionConfidence = minPoseDetectionConfidence
@@ -42,6 +44,7 @@ class PoseLandmarkerHelper: NSObject {
         self.minPosePresenceConfidence = minPosePresenceConfidence
         self.currentModel = currentModel
         self.currentDelegate = currentDelegate
+        self.runningMode = runningMode
         self.delegate = delegate
 
         // Find the bundle containing our model assets
@@ -84,11 +87,13 @@ class PoseLandmarkerHelper: NSObject {
 
             let options = PoseLandmarkerOptions()
             options.baseOptions = baseOptions
-            options.runningMode = .liveStream
+            options.runningMode = runningMode
             options.minPoseDetectionConfidence = minPoseDetectionConfidence
             options.minTrackingConfidence = minPoseTrackingConfidence
             options.minPosePresenceConfidence = minPosePresenceConfidence
-            options.poseLandmarkerLiveStreamDelegate = self
+            if runningMode == .liveStream {
+                options.poseLandmarkerLiveStreamDelegate = self
+            }
 
             poseLandmarker = try PoseLandmarker(options: options)
         } catch {
@@ -102,11 +107,13 @@ class PoseLandmarkerHelper: NSObject {
                     cpuBaseOptions.delegate = .CPU
                     let cpuOptions = PoseLandmarkerOptions()
                     cpuOptions.baseOptions = cpuBaseOptions
-                    cpuOptions.runningMode = .liveStream
+                    cpuOptions.runningMode = runningMode
                     cpuOptions.minPoseDetectionConfidence = minPoseDetectionConfidence
                     cpuOptions.minTrackingConfidence = minPoseTrackingConfidence
                     cpuOptions.minPosePresenceConfidence = minPosePresenceConfidence
-                    cpuOptions.poseLandmarkerLiveStreamDelegate = self
+                    if runningMode == .liveStream {
+                        cpuOptions.poseLandmarkerLiveStreamDelegate = self
+                    }
                     poseLandmarker = try PoseLandmarker(options: cpuOptions)
                     print("[PoseLandmarkerHelper] Successfully fell back to CPU delegate")
                 } catch {
@@ -123,12 +130,34 @@ class PoseLandmarkerHelper: NSObject {
     /// Detect pose asynchronously from a CMSampleBuffer (zero-copy).
     func detectAsync(sampleBuffer: CMSampleBuffer, timestampMs: Int) {
         guard let poseLandmarker = poseLandmarker else { return }
+        guard runningMode == .liveStream else {
+            delegate?.poseLandmarkerHelper(self, didFailWithError: "detectAsync requires live stream mode")
+            return
+        }
 
         do {
             let mpImage = try MPImage(sampleBuffer: sampleBuffer)
             try poseLandmarker.detectAsync(image: mpImage, timestampInMilliseconds: timestampMs)
         } catch {
             delegate?.poseLandmarkerHelper(self, didFailWithError: "Detection failed: \(error.localizedDescription)")
+        }
+    }
+
+    func detectVideoFrame(image: UIImage, timestampMs: Int) {
+        guard let poseLandmarker = poseLandmarker else { return }
+        guard runningMode == .video else {
+            delegate?.poseLandmarkerHelper(self, didFailWithError: "detectVideoFrame requires video mode")
+            return
+        }
+
+        do {
+            let mpImage = try MPImage(uiImage: image)
+            let result = try poseLandmarker.detect(videoFrame: mpImage, timestampInMilliseconds: timestampMs)
+            if let result {
+                publish(result: result, timestampMs: timestampMs)
+            }
+        } catch {
+            delegate?.poseLandmarkerHelper(self, didFailWithError: "Video detection failed: \(error.localizedDescription)")
         }
     }
 
@@ -143,16 +172,63 @@ class PoseLandmarkerHelper: NSObject {
         model: Int? = nil,
         minPoseDetectionConfidence: Float? = nil,
         minPoseTrackingConfidence: Float? = nil,
-        minPosePresenceConfidence: Float? = nil
+        minPosePresenceConfidence: Float? = nil,
+        runningMode: RunningMode? = nil
     ) {
         if let d = delegateType { currentDelegate = d }
         if let m = model { currentModel = m }
         if let c = minPoseDetectionConfidence { self.minPoseDetectionConfidence = c }
         if let c = minPoseTrackingConfidence { self.minPoseTrackingConfidence = c }
         if let c = minPosePresenceConfidence { self.minPosePresenceConfidence = c }
+        if let mode = runningMode { self.runningMode = mode }
 
         clearPoseLandmarker()
         setupPoseLandmarker()
+    }
+
+    private func publish(result: PoseLandmarkerResult, timestampMs: Int) {
+        delegate?.poseLandmarkerHelper(
+            self,
+            didFinishDetectionWithLandmarks: normalizedLandmarks(from: result),
+            worldLandmarks: worldLandmarks(from: result),
+            timestampMs: timestampMs
+        )
+    }
+
+    private func normalizedLandmarks(from result: PoseLandmarkerResult) -> [[String: Any]] {
+        var landmarks: [[String: Any]] = []
+        for poseLandmarks in result.landmarks {
+            for landmark in poseLandmarks {
+                let vis = landmark.visibility?.floatValue ?? 1.0
+                let pres = landmark.presence?.floatValue ?? 1.0
+                landmarks.append([
+                    "x": landmark.x,
+                    "y": landmark.y,
+                    "z": landmark.z,
+                    "visibility": vis,
+                    "presence": pres
+                ])
+            }
+        }
+        return landmarks
+    }
+
+    private func worldLandmarks(from result: PoseLandmarkerResult) -> [[String: Any]] {
+        var worldLandmarks: [[String: Any]] = []
+        for poseWorldLandmarks in result.worldLandmarks {
+            for landmark in poseWorldLandmarks {
+                let vis = landmark.visibility?.floatValue ?? 1.0
+                let pres = landmark.presence?.floatValue ?? 1.0
+                worldLandmarks.append([
+                    "x": landmark.x,
+                    "y": landmark.y,
+                    "z": landmark.z,
+                    "visibility": vis,
+                    "presence": pres
+                ])
+            }
+        }
+        return worldLandmarks
     }
 
     // MARK: - Bundle resolution
@@ -187,45 +263,7 @@ extension PoseLandmarkerHelper: PoseLandmarkerLiveStreamDelegate {
         }
 
         guard let result = result else { return }
-
-        // Extract 2D normalized landmarks
-        var landmarks: [[String: Any]] = []
-        for poseLandmarks in result.landmarks {
-            for landmark in poseLandmarks {
-                let vis = landmark.visibility?.floatValue ?? 1.0
-                let pres = landmark.presence?.floatValue ?? 1.0
-                landmarks.append([
-                    "x": landmark.x,
-                    "y": landmark.y,
-                    "z": landmark.z,
-                    "visibility": vis,
-                    "presence": pres
-                ])
-            }
-        }
-
-        // Extract 3D world landmarks
-        var worldLandmarks: [[String: Any]] = []
-        for poseWorldLandmarks in result.worldLandmarks {
-            for landmark in poseWorldLandmarks {
-                let vis = landmark.visibility?.floatValue ?? 1.0
-                let pres = landmark.presence?.floatValue ?? 1.0
-                worldLandmarks.append([
-                    "x": landmark.x,
-                    "y": landmark.y,
-                    "z": landmark.z,
-                    "visibility": vis,
-                    "presence": pres
-                ])
-            }
-        }
-
-        delegate?.poseLandmarkerHelper(
-            self,
-            didFinishDetectionWithLandmarks: landmarks,
-            worldLandmarks: worldLandmarks,
-            timestampMs: timestampInMilliseconds
-        )
+        publish(result: result, timestampMs: timestampInMilliseconds)
     }
 }
 

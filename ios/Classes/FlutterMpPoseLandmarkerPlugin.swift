@@ -15,7 +15,14 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
     private var eventSink: FlutterEventSink?
 
     private var cameraManager: CameraManager?
+    private var videoAnalysisManager: VideoAnalysisManager?
     private var registrar: FlutterPluginRegistrar?
+    private var sourceMode: String = "camera"
+    private var currentDelegate: Int = PoseLandmarkerHelper.delegateCPU
+    private var currentModel: Int = PoseLandmarkerHelper.modelLite
+    private var currentMinPoseDetectionConfidence: Float = PoseLandmarkerHelper.defaultPoseDetectionConfidence
+    private var currentMinPoseTrackingConfidence: Float = PoseLandmarkerHelper.defaultPoseTrackingConfidence
+    private var currentMinPosePresenceConfidence: Float = PoseLandmarkerHelper.defaultPosePresenceConfidence
 
     // MARK: - FlutterPlugin Registration
 
@@ -42,6 +49,8 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
         // Create camera manager
         let cameraManager = CameraManager()
         instance.cameraManager = cameraManager
+        let videoAnalysisManager = VideoAnalysisManager()
+        instance.videoAnalysisManager = videoAnalysisManager
 
         // Register platform view for native camera preview
         let factory = NativeCameraViewFactory(cameraManager: cameraManager)
@@ -64,6 +73,12 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
             let minPresence = (args?["minPosePresenceConfidence"] as? Double)
                 .map { Float($0) } ?? PoseLandmarkerHelper.defaultPosePresenceConfidence
 
+            currentDelegate = delegate
+            currentModel = model
+            currentMinPoseDetectionConfidence = minDetection
+            currentMinPoseTrackingConfidence = minTracking
+            currentMinPosePresenceConfidence = minPresence
+
             cameraManager?.setConfig(
                 delegate: delegate,
                 model: model,
@@ -71,6 +86,63 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
                 minPoseTrackingConfidence: minTracking,
                 minPosePresenceConfidence: minPresence
             )
+            videoAnalysisManager?.setConfig(
+                delegate: delegate,
+                model: model,
+                minPoseDetectionConfidence: minDetection,
+                minPoseTrackingConfidence: minTracking,
+                minPosePresenceConfidence: minPresence
+            )
+            result(nil)
+
+        case "configureSource":
+            sourceMode = args?["source"] as? String ?? "camera"
+            if sourceMode == "camera" {
+                videoAnalysisManager?.stopVideoAnalysis()
+            } else {
+                cameraManager?.releaseCamera()
+            }
+            result(nil)
+
+        case "startVideoDetection":
+            guard let path = args?["path"] as? String, !path.isEmpty else {
+                result(
+                    FlutterError(
+                        code: "INVALID_ARGUMENT",
+                        message: "Video path is required",
+                        details: nil
+                    )
+                )
+                return
+            }
+
+            let intervalMs = args?["intervalMs"] as? Int ?? 33
+            let loop = args?["loop"] as? Bool ?? true
+            let startPositionMs = args?["startPositionMs"] as? Int ?? 0
+            sourceMode = "video"
+            cameraManager?.disableAnalysis()
+            cameraManager?.releaseCamera()
+            if videoAnalysisManager == nil {
+                let manager = VideoAnalysisManager()
+                manager.setConfig(
+                    delegate: currentDelegate,
+                    model: currentModel,
+                    minPoseDetectionConfidence: currentMinPoseDetectionConfidence,
+                    minPoseTrackingConfidence: currentMinPoseTrackingConfidence,
+                    minPosePresenceConfidence: currentMinPosePresenceConfidence
+                )
+                videoAnalysisManager = manager
+            }
+            videoAnalysisManager?.startVideoAnalysis(
+                filePath: path,
+                intervalMs: intervalMs,
+                loop: loop,
+                startPositionMs: startPositionMs
+            )
+            result(nil)
+
+        case "stopVideoDetection":
+            videoAnalysisManager?.stopVideoAnalysis()
             result(nil)
 
         case "switchCamera":
@@ -155,15 +227,27 @@ public class FlutterMpPoseLandmarkerPlugin: NSObject, FlutterPlugin, FlutterStre
         cameraManager?.onError = { [weak self] error, code in
             self?.eventSink?(FlutterError(code: "POSE_ERROR", message: error, details: ["code": code]))
         }
+        videoAnalysisManager?.onResults = { [weak self] json in
+            self?.eventSink?(json)
+        }
+        videoAnalysisManager?.onError = { [weak self] error, code in
+            self?.eventSink?(FlutterError(code: "VIDEO_ERROR", message: error, details: ["code": code]))
+        }
 
-        // Start camera and analysis (lazy start — matching Android behavior)
-        cameraManager?.enableAnalysis()
-        cameraManager?.startCamera()
+        if sourceMode == "camera" {
+            videoAnalysisManager?.stopVideoAnalysis()
+            cameraManager?.enableAnalysis()
+            cameraManager?.startCamera()
+        } else {
+            cameraManager?.disableAnalysis()
+            cameraManager?.releaseCamera()
+        }
 
         return nil
     }
 
     public func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        videoAnalysisManager?.stopVideoAnalysis()
         cameraManager?.disableAnalysis()
         cameraManager?.releaseCamera()
         eventSink = nil
