@@ -128,7 +128,11 @@ class PoseLandmarkerHelper: NSObject {
     // MARK: - Detection
 
     /// Detect pose asynchronously from a CMSampleBuffer (zero-copy).
-    func detectAsync(sampleBuffer: CMSampleBuffer, timestampMs: Int) {
+    func detectAsync(
+        sampleBuffer: CMSampleBuffer,
+        orientation: UIImage.Orientation,
+        timestampMs: Int
+    ) {
         guard let poseLandmarker = poseLandmarker else { return }
         guard runningMode == .liveStream else {
             delegate?.poseLandmarkerHelper(self, didFailWithError: "detectAsync requires live stream mode")
@@ -136,7 +140,7 @@ class PoseLandmarkerHelper: NSObject {
         }
 
         do {
-            let mpImage = try MPImage(sampleBuffer: sampleBuffer)
+            let mpImage = try MPImage(sampleBuffer: sampleBuffer, orientation: orientation)
             try poseLandmarker.detectAsync(image: mpImage, timestampInMilliseconds: timestampMs)
         } catch {
             delegate?.poseLandmarkerHelper(self, didFailWithError: "Detection failed: \(error.localizedDescription)")
