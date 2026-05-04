@@ -20,7 +20,6 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     private var currentCameraPosition: AVCaptureDevice.Position = .front
     private var videoOutput: AVCaptureVideoDataOutput?
     private var videoPreviewLayer: AVCaptureVideoPreviewLayer?
-    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
 
     var isAnalysisEnabled = false
     var isLoggingEnabled = false
@@ -108,15 +107,6 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
             print("[CameraManager] Failed to create camera input: \(error)")
             captureSession.commitConfiguration()
             return
-        }
-
-        if #available(iOS 17.0, *) {
-            rotationCoordinator = AVCaptureDevice.RotationCoordinator(
-                device: camera,
-                previewLayer: videoPreviewLayer
-            )
-        } else {
-            rotationCoordinator = nil
         }
 
         // Add video data output (if not already added)
@@ -267,7 +257,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
         }
 
         if #available(iOS 17.0, *) {
-            let captureAngle = rotationCoordinator?.videoRotationAngleForHorizonLevelCapture ?? 90
+            let captureAngle = captureRotationAngle() ?? 90
             if connection.isVideoRotationAngleSupported(captureAngle) {
                 connection.videoRotationAngle = captureAngle
             }
@@ -300,18 +290,26 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
         layer.videoGravity = .resizeAspectFill
         layer.frame = view.bounds
         videoPreviewLayer = layer
-        if #available(iOS 17.0, *) {
-            if let device = captureSession.inputs
-                .compactMap({ ($0 as? AVCaptureDeviceInput)?.device })
-                .first {
-                rotationCoordinator = AVCaptureDevice.RotationCoordinator(
-                    device: device,
-                    previewLayer: layer
-                )
-            }
-        }
+        configureVideoOutputConnection()
         configurePreviewConnection()
         return layer
+    }
+
+    private func currentCaptureDevice() -> AVCaptureDevice? {
+        captureSession.inputs
+            .compactMap { ($0 as? AVCaptureDeviceInput)?.device }
+            .first
+    }
+
+    @available(iOS 17.0, *)
+    private func captureRotationAngle() -> CGFloat? {
+        guard let device = currentCaptureDevice() else { return nil }
+
+        let coordinator = AVCaptureDevice.RotationCoordinator(
+            device: device,
+            previewLayer: videoPreviewLayer
+        )
+        return coordinator.videoRotationAngleForHorizonLevelCapture
     }
 
     // MARK: - PoseLandmarkerHelperDelegate
