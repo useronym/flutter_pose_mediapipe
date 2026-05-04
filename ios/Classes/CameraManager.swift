@@ -20,6 +20,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     private var currentCameraPosition: AVCaptureDevice.Position = .front
     private var videoOutput: AVCaptureVideoDataOutput?
     private var videoPreviewLayer: AVCaptureVideoPreviewLayer?
+    private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
 
     var isAnalysisEnabled = false
     var isLoggingEnabled = false
@@ -107,6 +108,15 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
             print("[CameraManager] Failed to create camera input: \(error)")
             captureSession.commitConfiguration()
             return
+        }
+
+        if #available(iOS 17.0, *) {
+            rotationCoordinator = AVCaptureDevice.RotationCoordinator(
+                device: camera,
+                previewLayer: videoPreviewLayer
+            )
+        } else {
+            rotationCoordinator = nil
         }
 
         // Add video data output (if not already added)
@@ -251,11 +261,18 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
     private func configureVideoOutputConnection() {
         guard let connection = videoOutput?.connection(with: .video) else { return }
 
-        // Keep analysis frames in the camera's raw sensor space.
-        // MediaPipe receives the explicit display orientation separately.
         if connection.isVideoMirroringSupported {
             connection.automaticallyAdjustsVideoMirroring = false
             connection.isVideoMirrored = false
+        }
+
+        if #available(iOS 17.0, *) {
+            let captureAngle = rotationCoordinator?.videoRotationAngleForHorizonLevelCapture ?? 90
+            if connection.isVideoRotationAngleSupported(captureAngle) {
+                connection.videoRotationAngle = captureAngle
+            }
+        } else if connection.isVideoOrientationSupported {
+            connection.videoOrientation = .portrait
         }
     }
 
@@ -272,24 +289,7 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
             connection.isVideoMirrored = shouldMirror
         }
 
-        if #available(iOS 17.0, *) {
-            if connection.isVideoRotationAngleSupported(90) {
-                connection.videoRotationAngle = 90
-            }
-        } else if connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
-        }
-
         previewIsMirrored = connection.isVideoMirrored
-    }
-
-    private func sampleBufferOrientation() -> UIImage.Orientation {
-        switch currentCameraPosition {
-        case .front:
-            return .left
-        default:
-            return .right
-        }
     }
 
     // MARK: - Preview Layer
@@ -300,6 +300,16 @@ class CameraManager: NSObject, PoseLandmarkerHelperDelegate {
         layer.videoGravity = .resizeAspectFill
         layer.frame = view.bounds
         videoPreviewLayer = layer
+        if #available(iOS 17.0, *) {
+            if let device = captureSession.inputs
+                .compactMap({ ($0 as? AVCaptureDeviceInput)?.device })
+                .first {
+                rotationCoordinator = AVCaptureDevice.RotationCoordinator(
+                    device: device,
+                    previewLayer: layer
+                )
+            }
+        }
         configurePreviewConnection()
         return layer
     }
@@ -358,10 +368,6 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Feed to MediaPipe (zero-copy: MPImage wraps CMSampleBuffer directly)
         guard let helper = poseLandmarkerHelper else { return }
         let timestampMs = Int(Date().timeIntervalSince1970 * 1000)
-        helper.detectAsync(
-            sampleBuffer: sampleBuffer,
-            orientation: sampleBufferOrientation(),
-            timestampMs: timestampMs
-        )
+        helper.detectAsync(sampleBuffer: sampleBuffer, timestampMs: timestampMs)
     }
 }
